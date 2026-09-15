@@ -68,6 +68,30 @@ def test_level_selection_prefers_finer_native_data() -> None:
     assert choose_level_for_downsample(metadata, 12).level == 2
 
 
+def test_level_selection_tolerates_integer_pyramid_rounding() -> None:
+    metadata = SlideMetadata(
+        "slide.svs",
+        (
+            LevelInfo(0, (84_138, 67_802), (1, 1)),
+            LevelInfo(1, (21_034, 16_950), (4.000095, 4.000118)),
+            LevelInfo(2, (5_258, 4_237), (16.001902, 16.00236)),
+            LevelInfo(3, (1_314, 1_059), (64.031963, 64.024551)),
+        ),
+    )
+
+    assert choose_level_for_downsample(metadata, 4).level == 1
+    assert choose_level_for_downsample(metadata, 16).level == 2
+    assert choose_level_for_downsample(metadata, 64).level == 3
+    assert choose_level_for_downsample(metadata, 3.9).level == 0
+
+
+def test_level_selection_validates_tolerance() -> None:
+    metadata = SlideMetadata("slide.tif", (LevelInfo(0, (10, 10), (1, 1)),))
+
+    with np.testing.assert_raises_regex(ValueError, "relative_tolerance"):
+        choose_level_for_downsample(metadata, 1, relative_tolerance=-0.1)
+
+
 def test_tile_renderer_selects_level_encodes_and_caches(tmp_path: Path) -> None:
     path = tmp_path / "slide.tif"
     path.touch()
@@ -98,4 +122,3 @@ def test_tile_renderer_crops_edge_regions(tmp_path: Path) -> None:
     assert (result.width, result.height) == (2, 2)
     assert reader.calls == [((8, 6), 0, (2, 2))]
     renderer.close()
-

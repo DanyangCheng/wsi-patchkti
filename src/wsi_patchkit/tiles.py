@@ -52,18 +52,26 @@ def iiif_scale_factors(
 def choose_level_for_downsample(
     metadata: SlideMetadata,
     requested: float | Sequence[float],
+    *,
+    relative_tolerance: float = 0.01,
 ) -> LevelInfo:
-    """Choose the coarsest native level no coarser than the requested view.
+    """Choose the coarsest native level suitable for the requested view.
 
     Reading a slightly finer level and reducing it avoids visible blur caused by
-    upscaling a coarser native WSI level.
+    upscaling a coarser native WSI level. A small tolerance accounts for pyramid
+    dimensions rounded to whole pixels, such as an intended 4x level reported as
+    4.000095x.
     """
     requested_pair = as_mpp(requested, name="requested_downsample")
+    tolerance = float(relative_tolerance)
+    if not math.isfinite(tolerance) or tolerance < 0:
+        raise ValueError("relative_tolerance must be finite and non-negative")
+    upper_bound = tuple(value * (1 + tolerance) for value in requested_pair)
     eligible = [
         level
         for level in metadata.levels
-        if level.downsample[0] <= requested_pair[0]
-        and level.downsample[1] <= requested_pair[1]
+        if level.downsample[0] <= upper_bound[0]
+        and level.downsample[1] <= upper_bound[1]
     ]
     if not eligible:
         return metadata.levels[0]
