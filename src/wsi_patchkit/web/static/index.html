@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WSI PatchKit Viewer</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script
+      src="https://cdn.jsdelivr.net/npm/openseadragon@5.0.1/build/openseadragon/openseadragon.min.js"
+      defer
+    ></script>
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <header class="toolbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <div>
+          <strong>WSI PatchKit</strong>
+          <small>Whole-slide viewer</small>
+        </div>
+      </div>
+
+      <label class="slide-picker">
+        <span>切片</span>
+        <select id="slide-select" aria-label="选择切片"></select>
+      </label>
+
+      <div class="zoom-control">
+        <button id="zoom-out" type="button" aria-label="缩小">−</button>
+        <input
+          id="zoom-slider"
+          type="range"
+          min="-8"
+          max="3"
+          value="0"
+          step="0.01"
+          aria-label="缩放"
+        />
+        <button id="zoom-in" type="button" aria-label="放大">＋</button>
+        <button id="home-view" type="button">全图</button>
+      </div>
+
+      <div class="status-group">
+        <span id="zoom-label">等待切片</span>
+        <span id="coordinate-label">x — · y —</span>
+      </div>
+    </header>
+
+    <main>
+      <div id="viewer" aria-label="全切片图像查看器"></div>
+      <div id="empty-state" class="empty-state">
+        <div class="spinner" aria-hidden="true"></div>
+        <p id="status-message">正在读取切片列表…</p>
+      </div>
+      <div class="help">滚轮/双指缩放 · 拖动平移 · 双击放大</div>
+      <div id="scale" class="scale" hidden>
+        <span id="scale-label"></span>
+        <i id="scale-bar"></i>
+      </div>
+    </main>
+  </body>
+</html>
+

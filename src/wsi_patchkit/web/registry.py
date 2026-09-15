@@ -1,0 +1,64 @@
+"""Explicit, path-safe registration of slides exposed by the web viewer."""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass
+from pathlib import Path
+
+from ..types import MPP, as_mpp
+
+_SLIDE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+@dataclass(frozen=True, slots=True)
+class SlideSource:
+    """One server-side WSI and an optional physical-resolution override."""
+
+    path: str | Path
+    source_mpp: MPP | float | None = None
+
+    def __post_init__(self) -> None:
+        resolved = Path(self.path).resolve()
+        if not resolved.is_file():
+            raise FileNotFoundError(resolved)
+        object.__setattr__(self, "path", resolved)
+        if self.source_mpp is not None:
+            object.__setattr__(
+                self,
+                "source_mpp",
+                as_mpp(self.source_mpp, name="source_mpp"),
+            )
+
+
+class SlideRegistry(Mapping[str, SlideSource]):
+    """Map public identifiers to private server-side WSI paths."""
+
+    def __init__(
+        self,
+        slides: Mapping[str, SlideSource | str | Path],
+    ) -> None:
+        if not slides:
+            raise ValueError("at least one slide must be registered")
+        sources: dict[str, SlideSource] = {}
+        for slide_id, source in slides.items():
+            if not _SLIDE_ID.fullmatch(slide_id):
+                raise ValueError(
+                    "slide IDs must use 1-128 letters, numbers, dots, dashes, "
+                    "or underscores"
+                )
+            sources[slide_id] = (
+                source if isinstance(source, SlideSource) else SlideSource(source)
+            )
+        self._sources = sources
+
+    def __getitem__(self, slide_id: str) -> SlideSource:
+        return self._sources[slide_id]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._sources)
+
+    def __len__(self) -> int:
+        return len(self._sources)
+

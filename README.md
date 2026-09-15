@@ -8,7 +8,8 @@ whole-slide images (WSIs). Version 0.1 provides:
 - target-MPP-aligned, boundary-padded patch reads;
 - deterministic grid, random, indexed, and tissue-filtered sampling;
 - lazy patch streams;
-- an optional PyTorch `IterableDataset` adapter.
+- an optional PyTorch `IterableDataset` adapter;
+- an optional browser viewer with IIIF tiles, zooming, and panning.
 
 Dataset manifests, labels, augmentation, model execution, and prediction output
 formats intentionally remain application concerns.
@@ -39,6 +40,46 @@ PyTorch integration is isolated in another extra:
 ```bash
 uv sync --extra torch
 ```
+
+## Browser WSI viewer
+
+Install the optional web dependencies:
+
+```bash
+uv sync --extra web
+```
+
+Start the viewer by explicitly registering one or more public slide IDs:
+
+```bash
+uv run wsi-patchkit-viewer \
+  --slide case-001=/data/slides/case-001.svs \
+  --slide case-002=/data/slides/case-002.tif
+```
+
+Then open <http://127.0.0.1:8000>. The viewer supports mouse-wheel and pinch
+zooming, drag panning, double-click zooming, a navigator, level-0 coordinates,
+and an MPP-aware scale bar. TIFF files use the bundled tifffile reader; other
+formats are routed to the optional OpenSlide reader.
+
+Applications can embed the viewer server instead of using the CLI:
+
+```python
+from wsi_patchkit.web import SlideSource, create_app
+
+app = create_app(
+    {
+        "case-001": SlideSource("/data/slides/case-001.svs"),
+        # Supply an override when the file has no reliable MPP metadata.
+        "case-002": SlideSource("/data/slides/case-002.tif", source_mpp=0.5),
+    }
+)
+```
+
+The server exposes a conservative subset of IIIF Image API 3 at
+`/iiif/3/{slide_id}`. Paths are registered server-side and are never accepted
+from request URLs. Tiles are rendered from the closest suitable native pyramid
+level and returned with an ETag and private cache headers.
 
 ## Coordinate contract
 
@@ -138,4 +179,3 @@ uv run ruff check .
 uv run pytest --cov
 uv build
 ```
-

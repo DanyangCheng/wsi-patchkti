@@ -9,7 +9,7 @@ from .geometry import (
     read_aligned_patch,
     virtual_canvas_size,
 )
-from .io import OpenSlideReader, SlideReader, TiffReader
+from .io import AutoSlideReader, OpenSlideReader, SlideReader, TiffReader
 from .sampling import (
     GridSampler,
     IndexedSampler,
@@ -20,6 +20,12 @@ from .sampling import (
     axis_positions,
 )
 from .stream import PatchStream
+from .tiles import (
+    EncodedImage,
+    TileRenderer,
+    choose_level_for_downsample,
+    iiif_scale_factors,
+)
 from .types import (
     MPP,
     LevelInfo,
@@ -41,6 +47,8 @@ except PackageNotFoundError:
 __all__ = [
     "MPP",
     "Size",
+    "AutoSlideReader",
+    "EncodedImage",
     "GridSampler",
     "IndexedSampler",
     "LevelInfo",
@@ -56,12 +64,15 @@ __all__ = [
     "SlideReader",
     "SlideSpec",
     "TiffReader",
+    "TileRenderer",
     "TissueFilter",
     "TissueMask",
     "as_mpp",
     "as_size",
     "axis_positions",
     "choose_level",
+    "choose_level_for_downsample",
+    "iiif_scale_factors",
     "plan_aligned_read",
     "read_aligned_patch",
     "virtual_canvas_size",
