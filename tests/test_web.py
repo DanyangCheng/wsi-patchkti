@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import threading
+import time
 from pathlib import Path
 
 import numpy as np
@@ -10,7 +13,7 @@ pytest.importorskip("fastapi")
 httpx = pytest.importorskip("httpx2")
 
 from wsi_patchkit import TiffReader  # noqa: E402
-from wsi_patchkit.web import SlideRegistry, create_app  # noqa: E402
+from wsi_patchkit.web import SlideRegistry, TileWorkerPool, create_app  # noqa: E402
 
 
 def _write_slide(path: Path) -> None:
@@ -76,3 +79,33 @@ async def test_viewer_serves_metadata_tiles_and_frontend(tmp_path: Path) -> None
     assert "WSI PatchKit Viewer" in index.text
     assert script.status_code == 200
     assert "dragToPan" in script.text
+
+
+@pytest.mark.anyio
+async def test_tile_worker_pool_runs_blocking_jobs_concurrently() -> None:
+    lock = threading.Lock()
+    active = 0
+    max_active = 0
+
+    def work(value: int) -> int:
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        try:
+            time.sleep(0.03)
+            return value * 2
+        finally:
+            with lock:
+                active -= 1
+
+    workers = TileWorkerPool(3)
+    try:
+        results = await asyncio.gather(
+            *(workers.run(work, value) for value in range(3))
+        )
+    finally:
+        workers.close()
+
+    assert results == [0, 2, 4]
+    assert max_active == 3

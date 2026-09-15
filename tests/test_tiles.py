@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+import time
 from io import BytesIO
 from pathlib import Path
 
@@ -47,6 +49,40 @@ class RecordingReader:
 
     def close(self) -> None:
         self.closed = True
+
+
+class ConcurrentReaderState:
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.active = 0
+        self.max_active = 0
+        self.read_count = 0
+        self.closed_count = 0
+
+
+class ConcurrentReader:
+    def __init__(self, path: Path, state: ConcurrentReaderState) -> None:
+        self.path = path
+        self.state = state
+
+    def metadata(self, path: str | Path, *, source_mpp=None) -> SlideMetadata:
+        return SlideMetadata(path, (LevelInfo(0, (64, 64), (1, 1)),))
+
+    def read_region(self, path, location, level, size):
+        with self.state.lock:
+            self.state.active += 1
+            self.state.read_count += 1
+            self.state.max_active = max(self.state.max_active, self.state.active)
+        try:
+            time.sleep(0.03)
+            return np.zeros((size[1], size[0], 3), dtype=np.uint8)
+        finally:
+            with self.state.lock:
+                self.state.active -= 1
+
+    def close(self) -> None:
+        with self.state.lock:
+            self.state.closed_count += 1
 
 
 def test_iiif_scale_factors_cover_the_smallest_view() -> None:
@@ -121,4 +157,61 @@ def test_tile_renderer_crops_edge_regions(tmp_path: Path) -> None:
 
     assert (result.width, result.height) == (2, 2)
     assert reader.calls == [((8, 6), 0, (2, 2))]
+    renderer.close()
+
+
+def test_tile_renderer_reads_different_tiles_concurrently(tmp_path: Path) -> None:
+    path = tmp_path / "slide.tif"
+    path.touch()
+    state = ConcurrentReaderState()
+    renderer = TileRenderer(
+        reader_factory=lambda: ConcurrentReader(path, state),
+        reader_pool_size=3,
+    )
+    errors: list[BaseException] = []
+
+    def render(x: int) -> None:
+        try:
+            renderer.render_region(path, (x, 0, 8, 8), (8, 8), image_format="png")
+        except BaseException as error:
+            errors.append(error)
+
+    threads = [threading.Thread(target=render, args=(x,)) for x in (0, 8, 16)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert not errors
+    assert state.max_active == 3
+    assert state.read_count == 3
+    renderer.close()
+    assert state.closed_count == 3
+
+
+def test_tile_renderer_coalesces_concurrent_identical_tiles(tmp_path: Path) -> None:
+    path = tmp_path / "slide.tif"
+    path.touch()
+    state = ConcurrentReaderState()
+    renderer = TileRenderer(
+        reader_factory=lambda: ConcurrentReader(path, state),
+        reader_pool_size=3,
+        cache_size=0,
+    )
+    results = []
+
+    def render() -> None:
+        results.append(
+            renderer.render_region(path, (0, 0, 8, 8), (8, 8), image_format="png")
+        )
+
+    threads = [threading.Thread(target=render) for _ in range(3)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert state.read_count == 1
+    assert len(results) == 3
+    assert results[0] is results[1] is results[2]
     renderer.close()

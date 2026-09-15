@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import math
+import queue
 import threading
 from collections import OrderedDict
-from collections.abc import Sequence
+from collections.abc import Callable, Iterator, Sequence
+from concurrent.futures import Future
+from contextlib import contextmanager
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -20,6 +23,7 @@ from .io.base import SlideReader
 from .types import MPP, LevelInfo, SlideMetadata, as_mpp
 
 ImageFormat = Literal["jpg", "png"]
+ReaderFactory = Callable[[], SlideReader]
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,18 +105,66 @@ def _as_rgb(array: NDArray[np.generic]) -> NDArray[np.uint8]:
     return np.asarray(array, dtype=np.uint8)
 
 
+class SlideReaderPool:
+    """A bounded pool of independent readers for concurrent tile requests."""
+
+    def __init__(self, reader_factory: ReaderFactory, size: int = 4) -> None:
+        if size < 1:
+            raise ValueError("reader pool size must be positive")
+        readers: list[SlideReader] = []
+        try:
+            for _ in range(size):
+                readers.append(reader_factory())
+        except BaseException:
+            for reader in readers:
+                reader.close()
+            raise
+        self._readers = tuple(readers)
+        self._available: queue.LifoQueue[SlideReader] = queue.LifoQueue(size)
+        for reader in self._readers:
+            self._available.put(reader)
+        self._closed = False
+        self._state_lock = threading.Lock()
+
+    @property
+    def size(self) -> int:
+        return len(self._readers)
+
+    @contextmanager
+    def acquire(self) -> Iterator[SlideReader]:
+        with self._state_lock:
+            if self._closed:
+                raise RuntimeError("reader pool is closed")
+        reader = self._available.get()
+        try:
+            yield reader
+        finally:
+            self._available.put(reader)
+
+    def close(self) -> None:
+        with self._state_lock:
+            if self._closed:
+                return
+            self._closed = True
+        borrowed = [self._available.get() for _ in self._readers]
+        for reader in borrowed:
+            reader.close()
+
+
 class TileRenderer:
     """Render arbitrary level-0 regions with native-level selection and caching.
 
-    Reader calls are serialized because common TIFF and OpenSlide handles are not
-    safe to seek from multiple request threads at the same time. Applications can
-    scale across processes or construct multiple renderer instances.
+    Each reader handle is used by at most one request at a time. Different tiles
+    can read concurrently when a ``reader_factory`` and pool size greater than one
+    are supplied. Shared locks only protect short cache bookkeeping operations.
     """
 
     def __init__(
         self,
-        reader: SlideReader,
+        reader: SlideReader | None = None,
         *,
+        reader_factory: ReaderFactory | None = None,
+        reader_pool_size: int = 1,
         cache_size: int = 512,
         jpeg_quality: int = 85,
         max_output_pixels: int = 16_777_216,
@@ -123,12 +175,22 @@ class TileRenderer:
             raise ValueError("jpeg_quality must be in [1, 100]")
         if max_output_pixels < 1:
             raise ValueError("max_output_pixels must be positive")
-        self.reader = reader
+        if reader is not None and reader_factory is not None:
+            raise ValueError("provide reader or reader_factory, not both")
+        if reader is None and reader_factory is None:
+            raise ValueError("reader or reader_factory is required")
+        if reader is not None:
+            self._readers = SlideReaderPool(lambda: reader, size=1)
+        else:
+            assert reader_factory is not None
+            self._readers = SlideReaderPool(reader_factory, size=reader_pool_size)
         self.cache_size = int(cache_size)
         self.jpeg_quality = int(jpeg_quality)
         self.max_output_pixels = int(max_output_pixels)
         self._cache: OrderedDict[tuple[object, ...], EncodedImage] = OrderedDict()
-        self._lock = threading.RLock()
+        self._metadata_cache: dict[tuple[object, ...], SlideMetadata] = {}
+        self._inflight: dict[tuple[object, ...], Future[EncodedImage]] = {}
+        self._state_lock = threading.Lock()
 
     def metadata(
         self,
@@ -136,8 +198,19 @@ class TileRenderer:
         *,
         source_mpp: float | Sequence[float] | None = None,
     ) -> SlideMetadata:
-        with self._lock:
-            return self.reader.metadata(path, source_mpp=source_mpp)
+        source_mpp_pair: MPP | None = (
+            None if source_mpp is None else as_mpp(source_mpp, name="source_mpp")
+        )
+        fingerprint = self._fingerprint(path)
+        key: tuple[object, ...] = fingerprint, source_mpp_pair
+        with self._state_lock:
+            cached = self._metadata_cache.get(key)
+        if cached is not None:
+            return cached
+        with self._readers.acquire() as reader:
+            metadata = reader.metadata(path, source_mpp=source_mpp_pair)
+        with self._state_lock:
+            return self._metadata_cache.setdefault(key, metadata)
 
     @staticmethod
     def _fingerprint(path: str | Path) -> tuple[str, int, int]:
@@ -182,83 +255,120 @@ class TileRenderer:
             image_format,
             self.jpeg_quality,
         )
-        with self._lock:
+        with self._state_lock:
             cached = self._cache.get(key)
             if cached is not None:
                 self._cache.move_to_end(key)
                 return cached
+            future = self._inflight.get(key)
+            owns_render = future is None
+            if future is None:
+                future = Future()
+                self._inflight[key] = future
+        if not owns_render:
+            return future.result()
 
-            metadata = self.reader.metadata(path, source_mpp=source_mpp_pair)
-            full_width, full_height = metadata.dimensions
-            if x >= full_width or y >= full_height:
-                raise ValueError("region starts outside the image")
-            clipped_width = min(width, full_width - x)
-            clipped_height = min(height, full_height - y)
-            rendered_width = max(1, round(output_width * clipped_width / width))
-            rendered_height = max(1, round(output_height * clipped_height / height))
-            requested_downsample = (
-                clipped_width / rendered_width,
-                clipped_height / rendered_height,
-            )
-            level = choose_level_for_downsample(metadata, requested_downsample)
-
-            lx0 = max(0, math.floor(x / level.downsample[0]))
-            ly0 = max(0, math.floor(y / level.downsample[1]))
-            lx1 = min(
-                level.dimensions[0],
-                math.ceil((x + clipped_width) / level.downsample[0]),
-            )
-            ly1 = min(
-                level.dimensions[1],
-                math.ceil((y + clipped_height) / level.downsample[1]),
-            )
-            level_zero_location = (
-                round(lx0 * level.downsample[0]),
-                round(ly0 * level.downsample[1]),
-            )
-            array = self.reader.read_region(
+        try:
+            result = self._render_uncached(
                 path,
-                level_zero_location,
-                level.level,
-                (lx1 - lx0, ly1 - ly0),
+                (x, y, width, height),
+                (output_width, output_height),
+                image_format=image_format,
+                source_mpp=source_mpp_pair,
             )
-            image = Image.fromarray(_as_rgb(array), "RGB")
-            extent = (
-                (x / level.downsample[0]) - lx0,
-                (y / level.downsample[1]) - ly0,
-                ((x + clipped_width) / level.downsample[0]) - lx0,
-                ((y + clipped_height) / level.downsample[1]) - ly0,
-            )
-            image = image.transform(
-                (rendered_width, rendered_height),
-                Image.Transform.EXTENT,
-                extent,
-                resample=Image.Resampling.BILINEAR,
-            )
-
-            buffer = BytesIO()
-            if image_format == "jpg":
-                image.save(buffer, format="JPEG", quality=self.jpeg_quality)
-                media_type = "image/jpeg"
-            else:
-                image.save(buffer, format="PNG")
-                media_type = "image/png"
-            content = buffer.getvalue()
-            result = EncodedImage(
-                content,
-                media_type,
-                rendered_width,
-                rendered_height,
-                f'"{hashlib.sha256(content).hexdigest()}"',
-            )
+        except BaseException as error:
+            with self._state_lock:
+                self._inflight.pop(key, None)
+                future.set_exception(error)
+            raise
+        with self._state_lock:
             if self.cache_size:
                 self._cache[key] = result
                 self._cache.move_to_end(key)
                 while len(self._cache) > self.cache_size:
                     self._cache.popitem(last=False)
-            return result
+            self._inflight.pop(key, None)
+            future.set_result(result)
+        return result
+
+    def _render_uncached(
+        self,
+        path: str | Path,
+        region: tuple[int, int, int, int],
+        output_size: tuple[int, int],
+        *,
+        image_format: ImageFormat,
+        source_mpp: MPP | None,
+    ) -> EncodedImage:
+        x, y, width, height = region
+        output_width, output_height = output_size
+        metadata = self.metadata(path, source_mpp=source_mpp)
+        full_width, full_height = metadata.dimensions
+        if x >= full_width or y >= full_height:
+            raise ValueError("region starts outside the image")
+        clipped_width = min(width, full_width - x)
+        clipped_height = min(height, full_height - y)
+        rendered_width = max(1, round(output_width * clipped_width / width))
+        rendered_height = max(1, round(output_height * clipped_height / height))
+        requested_downsample = (
+            clipped_width / rendered_width,
+            clipped_height / rendered_height,
+        )
+        level = choose_level_for_downsample(metadata, requested_downsample)
+
+        lx0 = max(0, math.floor(x / level.downsample[0]))
+        ly0 = max(0, math.floor(y / level.downsample[1]))
+        lx1 = min(
+            level.dimensions[0],
+            math.ceil((x + clipped_width) / level.downsample[0]),
+        )
+        ly1 = min(
+            level.dimensions[1],
+            math.ceil((y + clipped_height) / level.downsample[1]),
+        )
+        level_zero_location = (
+            round(lx0 * level.downsample[0]),
+            round(ly0 * level.downsample[1]),
+        )
+        with self._readers.acquire() as reader:
+            array = reader.read_region(
+                path,
+                level_zero_location,
+                level.level,
+                (lx1 - lx0, ly1 - ly0),
+            )
+        image = Image.fromarray(_as_rgb(array), "RGB")
+        extent = (
+            (x / level.downsample[0]) - lx0,
+            (y / level.downsample[1]) - ly0,
+            ((x + clipped_width) / level.downsample[0]) - lx0,
+            ((y + clipped_height) / level.downsample[1]) - ly0,
+        )
+        image = image.transform(
+            (rendered_width, rendered_height),
+            Image.Transform.EXTENT,
+            extent,
+            resample=Image.Resampling.BILINEAR,
+        )
+
+        buffer = BytesIO()
+        if image_format == "jpg":
+            image.save(buffer, format="JPEG", quality=self.jpeg_quality)
+            media_type = "image/jpeg"
+        else:
+            image.save(buffer, format="PNG")
+            media_type = "image/png"
+        content = buffer.getvalue()
+        return EncodedImage(
+            content,
+            media_type,
+            rendered_width,
+            rendered_height,
+            f'"{hashlib.sha256(content).hexdigest()}"',
+        )
 
     def close(self) -> None:
-        with self._lock:
+        with self._state_lock:
             self._cache.clear()
-            self.reader.close()
+            self._metadata_cache.clear()
+        self._readers.close()

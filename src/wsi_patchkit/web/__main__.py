@@ -26,6 +26,7 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", default=8000, type=int)
     parser.add_argument("--tile-size", default=256, type=int)
+    parser.add_argument("--reader-pool-size", default=4, type=int)
     args = parser.parse_args()
 
     try:
@@ -35,10 +36,13 @@ def main() -> None:
 
     from .app import create_app
 
-    app = create_app(dict(args.slide), tile_size=args.tile_size)
+    app = create_app(
+        dict(args.slide),
+        tile_size=args.tile_size,
+        reader_pool_size=args.reader_pool_size,
+    )
     uvicorn.run(app, host=args.host, port=args.port)
 
 
 if __name__ == "__main__":
     main()
-

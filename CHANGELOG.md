@@ -10,3 +10,5 @@
 - Added an optional IIIF tile server and browser viewer with zooming, panning,
   navigation, coordinates, and an MPP-aware scale bar.
 - Accounted for whole-pixel pyramid rounding when selecting native viewer levels.
+- Added concurrent reader and tile-worker pools while keeping cache bookkeeping
+  locks outside WSI decoding, resizing, and image encoding.

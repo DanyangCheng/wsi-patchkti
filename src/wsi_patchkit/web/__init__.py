@@ -2,6 +2,6 @@
 
 from .app import create_app
 from .registry import SlideRegistry, SlideSource
+from .workers import TileWorkerPool
 
-__all__ = ["SlideRegistry", "SlideSource", "create_app"]
-
+__all__ = ["SlideRegistry", "SlideSource", "TileWorkerPool", "create_app"]

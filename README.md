@@ -54,7 +54,8 @@ Start the viewer by explicitly registering one or more public slide IDs:
 ```bash
 uv run wsi-patchkit-viewer \
   --slide case-001=/data/slides/case-001.svs \
-  --slide case-002=/data/slides/case-002.tif
+  --slide case-002=/data/slides/case-002.tif \
+  --reader-pool-size 4
 ```
 
 Then open <http://127.0.0.1:8000>. The viewer supports mouse-wheel and pinch
@@ -79,7 +80,9 @@ app = create_app(
 The server exposes a conservative subset of IIIF Image API 3 at
 `/iiif/3/{slide_id}`. Paths are registered server-side and are never accepted
 from request URLs. Tiles are rendered from the closest suitable native pyramid
-level and returned with an ETag and private cache headers.
+level and returned with an ETag and private cache headers. By default, four
+independent readers process different tiles concurrently; tune
+`--reader-pool-size` to match available CPU, memory, and storage throughput.
 
 ## Coordinate contract
 

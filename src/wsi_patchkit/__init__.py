@@ -22,6 +22,7 @@ from .sampling import (
 from .stream import PatchStream
 from .tiles import (
     EncodedImage,
+    SlideReaderPool,
     TileRenderer,
     choose_level_for_downsample,
     iiif_scale_factors,
@@ -62,6 +63,7 @@ __all__ = [
     "SamplingContext",
     "SlideMetadata",
     "SlideReader",
+    "SlideReaderPool",
     "SlideSpec",
     "TiffReader",
     "TileRenderer",
