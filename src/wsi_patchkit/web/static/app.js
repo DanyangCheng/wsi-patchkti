@@ -16,11 +16,27 @@
   const scale = document.querySelector("#scale");
   const scaleLabel = document.querySelector("#scale-label");
   const scaleBar = document.querySelector("#scale-bar");
+  const cropTool = document.querySelector("#crop-tool");
+  const cropPanel = document.querySelector("#crop-panel");
+  const cropClose = document.querySelector("#crop-close");
+  const cropX = document.querySelector("#crop-x");
+  const cropY = document.querySelector("#crop-y");
+  const cropWidth = document.querySelector("#crop-width");
+  const cropHeight = document.querySelector("#crop-height");
+  const cropFormat = document.querySelector("#crop-format");
+  const cropFilename = document.querySelector("#crop-filename");
+  const cropSave = document.querySelector("#crop-save");
+  const cropStatus = document.querySelector("#crop-status");
+  const cropOverlay = document.querySelector("#crop-overlay");
+  const cropOverlaySize = document.querySelector("#crop-overlay-size");
 
   let slides = new Map();
   let currentSlide = null;
   let viewer = null;
   let openSequence = 0;
+  let cropActive = false;
+  let cropOverlayAdded = false;
+  let cropRegion = { x: 0, y: 0, width: 1024, height: 1024 };
 
   function showStatus(message, loading = false) {
     statusMessage.textContent = message;
@@ -78,6 +94,133 @@
     const viewportZoom = item.imageToViewportZoom(imageZoom);
     viewer.viewport.zoomTo(viewportZoom);
     viewer.viewport.applyConstraints();
+  }
+
+  function setCropStatus(message, type = "") {
+    cropStatus.textContent = message;
+    cropStatus.className = `crop-status ${type}`.trim();
+  }
+
+  function updateCropOverlay() {
+    const item = currentItem();
+    if (!item || !cropActive) return;
+    const imageRect = new OpenSeadragon.Rect(
+      cropRegion.x,
+      cropRegion.y,
+      cropRegion.width,
+      cropRegion.height,
+    );
+    const viewportRect = item.imageToViewportRectangle(imageRect);
+    cropOverlay.hidden = false;
+    cropOverlaySize.textContent =
+      `${cropRegion.width.toLocaleString()} × ${cropRegion.height.toLocaleString()} px`;
+    if (cropOverlayAdded) {
+      viewer.updateOverlay(cropOverlay, viewportRect);
+    } else {
+      viewer.addOverlay({ element: cropOverlay, location: viewportRect });
+      cropOverlayAdded = true;
+    }
+  }
+
+  function setCropRegion(region, updateInputs = true) {
+    if (!currentSlide) return;
+    const width = Math.max(1, Math.min(Math.round(region.width), currentSlide.width));
+    const height = Math.max(1, Math.min(Math.round(region.height), currentSlide.height));
+    cropRegion = {
+      x: Math.max(0, Math.min(Math.round(region.x), currentSlide.width - width)),
+      y: Math.max(0, Math.min(Math.round(region.y), currentSlide.height - height)),
+      width,
+      height,
+    };
+    if (updateInputs) {
+      cropX.value = String(cropRegion.x);
+      cropY.value = String(cropRegion.y);
+      cropWidth.value = String(cropRegion.width);
+      cropHeight.value = String(cropRegion.height);
+      cropX.max = String(currentSlide.width - cropRegion.width);
+      cropY.max = String(currentSlide.height - cropRegion.height);
+      cropWidth.max = String(currentSlide.width);
+      cropHeight.max = String(currentSlide.height);
+    }
+    updateCropOverlay();
+  }
+
+  function centerCropAt(imagePoint) {
+    setCropRegion({
+      ...cropRegion,
+      x: imagePoint.x - cropRegion.width / 2,
+      y: imagePoint.y - cropRegion.height / 2,
+    });
+  }
+
+  function initializeCropRegion() {
+    const item = currentItem();
+    if (!item || !currentSlide) return;
+    const center = item.viewportToImageCoordinates(viewer.viewport.getCenter(true));
+    const width = Math.min(1024, currentSlide.width);
+    const height = Math.min(1024, currentSlide.height);
+    setCropRegion({
+      x: center.x - width / 2,
+      y: center.y - height / 2,
+      width,
+      height,
+    });
+  }
+
+  function setCropActive(active) {
+    cropActive = Boolean(active && currentItem() && currentSlide);
+    cropTool.setAttribute("aria-pressed", String(cropActive));
+    cropPanel.hidden = !cropActive;
+    if (cropActive) {
+      initializeCropRegion();
+      setCropStatus("");
+    } else {
+      if (cropOverlayAdded) viewer.removeOverlay(cropOverlay);
+      cropOverlayAdded = false;
+      cropOverlay.hidden = true;
+    }
+  }
+
+  function syncCropInputs() {
+    const values = [cropX, cropY, cropWidth, cropHeight].map((input) =>
+      Number(input.value),
+    );
+    if (!values.every(Number.isFinite)) return;
+    setCropRegion({
+      x: values[0],
+      y: values[1],
+      width: values[2],
+      height: values[3],
+    });
+    setCropStatus("");
+  }
+
+  async function saveCrop() {
+    if (!currentSlide || !cropActive) return;
+    cropSave.disabled = true;
+    setCropStatus("正在生成 level-0 裁剪并保存…");
+    try {
+      const response = await fetch(
+        `/api/slides/${encodeURIComponent(currentSlide.id)}/crops`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ...cropRegion,
+            format: cropFormat.value,
+            filename: cropFilename.value.trim() || null,
+          }),
+        },
+      );
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.detail || `HTTP ${response.status}`);
+      cropFilename.value = "";
+      setCropStatus(`已保存到服务器：${result.filename}`, "success");
+    } catch (error) {
+      setCropStatus(`保存失败：${error.message}`, "error");
+    } finally {
+      cropSave.disabled = false;
+    }
   }
 
   async function openSlide(slideId) {
@@ -198,6 +341,7 @@
     viewer.addHandler("open", () => {
       hideStatus();
       updateViewportStatus();
+      if (cropActive) initializeCropRegion();
     });
     viewer.addHandler("open-failed", (event) => {
       showStatus(`切片加载失败：${event.message || "未知错误"}`);
@@ -217,6 +361,37 @@
         ? `x ${Math.floor(imagePoint.x).toLocaleString()} · y ${Math.floor(imagePoint.y).toLocaleString()}`
         : "x — · y —";
     });
+    viewer.addHandler("canvas-click", (event) => {
+      if (!cropActive || !event.quick || !event.position) return;
+      const item = currentItem();
+      if (!item) return;
+      const viewportPoint = viewer.viewport.pointFromPixel(event.position);
+      const imagePoint = item.viewportToImageCoordinates(viewportPoint);
+      centerCropAt(imagePoint);
+      event.preventDefaultAction = true;
+    });
+
+    new OpenSeadragon.MouseTracker({
+      element: cropOverlay,
+      clickHandler: (event) => {
+        event.preventDefaultAction = true;
+      },
+      dragHandler: (event) => {
+        const item = currentItem();
+        if (!item || !cropActive) return;
+        const viewportDelta = viewer.viewport.deltaPointsFromPixels(event.delta);
+        const imageOrigin = item.viewportToImageCoordinates(
+          new OpenSeadragon.Point(0, 0),
+        );
+        const imageDeltaPoint = item.viewportToImageCoordinates(viewportDelta);
+        setCropRegion({
+          ...cropRegion,
+          x: cropRegion.x + imageDeltaPoint.x - imageOrigin.x,
+          y: cropRegion.y + imageDeltaPoint.y - imageOrigin.y,
+        });
+        event.preventDefaultAction = true;
+      },
+    }).setTracking(true);
 
     document.querySelector("#zoom-in").addEventListener("click", () => {
       viewer.viewport.zoomBy(1.5);
@@ -229,6 +404,12 @@
     document.querySelector("#home-view").addEventListener("click", () => {
       viewer.viewport.goHome();
     });
+    cropTool.addEventListener("click", () => setCropActive(!cropActive));
+    cropClose.addEventListener("click", () => setCropActive(false));
+    for (const input of [cropX, cropY, cropWidth, cropHeight]) {
+      input.addEventListener("change", syncCropInputs);
+    }
+    cropSave.addEventListener("click", saveCrop);
     slider.addEventListener("input", () => setImageZoom(2 ** Number(slider.value)));
     menuButton.addEventListener("click", () => setSlideMenuOpen(menu.hidden));
     slideFilter.addEventListener("input", filterSlides);
@@ -239,6 +420,9 @@
       if (event.key === "Escape" && !menu.hidden) {
         closeSlideMenu();
         menuButton.focus();
+      } else if (event.key === "Escape" && cropActive) {
+        setCropActive(false);
+        cropTool.focus();
       }
     });
 

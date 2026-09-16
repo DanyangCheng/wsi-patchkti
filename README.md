@@ -55,6 +55,7 @@ Start the viewer by explicitly registering one or more public slide IDs:
 uv run wsi-patchkit-viewer \
   --slide case-001=/data/slides/case-001.svs \
   --slide case-002=/data/slides/case-002.tif \
+  --crop-output-dir /data/crops \
   --reader-pool-size 4
 ```
 
@@ -75,6 +76,12 @@ zooming, drag panning, double-click zooming, a navigator, level-0 coordinates,
 and an MPP-aware scale bar. TIFF files use the bundled tifffile reader; other
 formats are routed to the optional OpenSlide reader.
 
+Select **矩形裁剪** to place a rectangle on the slide, enter its exact level-0
+`x`, `y`, width, and height, and save a PNG or JPEG on the server. Crops are
+read directly from pyramid level 0 without rescaling. The server stores them in
+`--crop-output-dir` (the default is `./crops`) and never overwrites an existing
+file.
+
 Applications can embed the viewer server instead of using the CLI:
 
 ```python
@@ -85,7 +92,8 @@ app = create_app(
         "case-001": SlideSource("/data/slides/case-001.svs"),
         # Supply an override when the file has no reliable MPP metadata.
         "case-002": SlideSource("/data/slides/case-002.tif", source_mpp=0.5),
-    }
+    },
+    crop_output_dir="/data/crops",
 )
 ```
 

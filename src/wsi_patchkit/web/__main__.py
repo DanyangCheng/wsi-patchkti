@@ -95,6 +95,13 @@ def main() -> None:
     parser.add_argument("--port", default=8000, type=int)
     parser.add_argument("--tile-size", default=256, type=int)
     parser.add_argument("--reader-pool-size", default=4, type=int)
+    parser.add_argument(
+        "--crop-output-dir",
+        default=Path("crops"),
+        type=Path,
+        metavar="PATH",
+        help="save level-0 rectangular crops in this server-side directory",
+    )
     args = parser.parse_args()
 
     try:
@@ -118,6 +125,7 @@ def main() -> None:
         slides,
         tile_size=args.tile_size,
         reader_pool_size=args.reader_pool_size,
+        crop_output_dir=args.crop_output_dir,
     )
     uvicorn.run(app, host=args.host, port=args.port)
 

@@ -291,6 +291,43 @@ class TileRenderer:
             future.set_result(result)
         return result
 
+    def render_level0_region(
+        self,
+        path: str | Path,
+        region: tuple[int, int, int, int],
+        *,
+        image_format: ImageFormat = "png",
+        source_mpp: float | Sequence[float] | None = None,
+    ) -> EncodedImage:
+        """Read and encode an in-bounds region directly from pyramid level 0.
+
+        Unlike :meth:`render_region`, this method never selects another pyramid
+        level, rescales the image, clips the requested rectangle, or pads it.
+        It is intended for lossless, pixel-exact server-side crops.
+        """
+        x, y, width, height = map(int, region)
+        if x < 0 or y < 0 or width < 1 or height < 1:
+            raise ValueError("region must contain non-negative coordinates and size")
+        if width * height > self.max_output_pixels:
+            raise ValueError("requested output exceeds max_output_pixels")
+        if image_format not in ("jpg", "png"):
+            raise ValueError("image_format must be 'jpg' or 'png'")
+
+        source_mpp_pair: MPP | None = (
+            None if source_mpp is None else as_mpp(source_mpp, name="source_mpp")
+        )
+        metadata = self.metadata(path, source_mpp=source_mpp_pair)
+        full_width, full_height = metadata.dimensions
+        if x + width > full_width or y + height > full_height:
+            raise ValueError("region must be fully inside the level-0 image")
+
+        with self._readers.acquire() as reader:
+            array = reader.read_region(path, (x, y), 0, (width, height))
+        image = Image.fromarray(_as_rgb(array), "RGB")
+        if image.size != (width, height):
+            raise ValueError("reader returned an unexpected level-0 crop size")
+        return self._encode_image(image, image_format)
+
     def _render_uncached(
         self,
         path: str | Path,
@@ -351,19 +388,26 @@ class TileRenderer:
             resample=Image.Resampling.BILINEAR,
         )
 
+        return self._encode_image(image, image_format)
+
+    def _encode_image(
+        self,
+        image: Image.Image,
+        image_format: ImageFormat,
+    ) -> EncodedImage:
         buffer = BytesIO()
         if image_format == "jpg":
             image.save(buffer, format="JPEG", quality=self.jpeg_quality)
             media_type = "image/jpeg"
         else:
-            image.save(buffer, format="PNG")
+            image.save(buffer, format="PNG", compress_level=1)
             media_type = "image/png"
         content = buffer.getvalue()
         return EncodedImage(
             content,
             media_type,
-            rendered_width,
-            rendered_height,
+            image.width,
+            image.height,
             f'"{hashlib.sha256(content).hexdigest()}"',
         )
 

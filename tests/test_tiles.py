@@ -160,6 +160,25 @@ def test_tile_renderer_crops_edge_regions(tmp_path: Path) -> None:
     renderer.close()
 
 
+def test_tile_renderer_can_force_a_pixel_exact_level0_crop(tmp_path: Path) -> None:
+    path = tmp_path / "slide.tif"
+    path.touch()
+    reader = RecordingReader(path)
+    renderer = TileRenderer(reader)
+
+    result = renderer.render_level0_region(
+        path,
+        (2, 1, 4, 3),
+        image_format="png",
+    )
+
+    assert (result.width, result.height) == (4, 3)
+    assert reader.calls == [((2, 1), 0, (4, 3))]
+    decoded = np.asarray(Image.open(BytesIO(result.content)))
+    np.testing.assert_array_equal(decoded, reader.level0[1:4, 2:6])
+    renderer.close()
+
+
 def test_tile_renderer_reads_different_tiles_concurrently(tmp_path: Path) -> None:
     path = tmp_path / "slide.tif"
     path.touch()

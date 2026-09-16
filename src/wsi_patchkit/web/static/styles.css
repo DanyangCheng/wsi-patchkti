@@ -107,7 +107,8 @@ button:hover {
 }
 
 button:focus-visible,
-input:focus-visible {
+input:focus-visible,
+select:focus-visible {
   outline: 2px solid #6be2c5;
   outline-offset: 2px;
 }
@@ -302,6 +303,134 @@ main {
   border-left: 2px solid #e8edf5;
 }
 
+.crop-panel {
+  position: absolute;
+  z-index: 30;
+  top: 18px;
+  left: 18px;
+  width: min(390px, calc(100vw - 36px));
+  padding: 14px;
+  border: 1px solid #3a4b5e;
+  border-radius: 10px;
+  background: rgb(14 19 26 / 96%);
+  box-shadow: 0 18px 50px rgb(0 0 0 / 46%);
+  backdrop-filter: blur(12px);
+}
+
+.crop-panel[hidden],
+.crop-overlay[hidden] {
+  display: none;
+}
+
+.crop-panel-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 7px;
+}
+
+.crop-panel-title strong {
+  color: #7ce8cc;
+  font-size: 13px;
+}
+
+#crop-close {
+  height: 26px;
+  min-width: 26px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  font-size: 19px;
+}
+
+.crop-hint {
+  margin: 0 0 12px;
+  color: #8f9daf;
+  font-size: 11px;
+}
+
+.crop-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+  margin-bottom: 9px;
+}
+
+.crop-fields label {
+  display: grid;
+  gap: 4px;
+  color: #9eabba;
+  font-size: 11px;
+}
+
+.crop-fields input,
+.crop-fields select {
+  width: 100%;
+  height: 34px;
+  min-width: 0;
+  padding: 0 9px;
+  border: 1px solid #344152;
+  border-radius: 6px;
+  background: #0e141b;
+  color: #edf2f8;
+  font: inherit;
+  font-size: 12px;
+}
+
+.crop-fields .crop-filename {
+  grid-column: span 1;
+}
+
+#crop-save {
+  width: 100%;
+}
+
+button.primary,
+#crop-tool[aria-pressed="true"] {
+  border-color: #4fbca2;
+  background: #17483d;
+  color: #a5f5e1;
+}
+
+.crop-status {
+  min-height: 16px;
+  margin: 8px 1px 0;
+  color: #9eabba;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.crop-status.error {
+  color: #ff9a9a;
+}
+
+.crop-status.success {
+  color: #7ce8cc;
+}
+
+.crop-overlay {
+  z-index: 25;
+  border: 2px solid #62f0ce;
+  background: rgb(98 240 206 / 10%);
+  box-shadow:
+    0 0 0 1px rgb(0 0 0 / 65%),
+    inset 0 0 0 1px rgb(0 0 0 / 45%);
+  cursor: move;
+}
+
+.crop-overlay span {
+  position: absolute;
+  top: -25px;
+  left: -2px;
+  padding: 3px 6px;
+  border-radius: 4px 4px 4px 0;
+  background: #48b99f;
+  color: #07100e;
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
 .navigator {
   overflow: hidden !important;
   border: 1px solid #4a586a !important;
@@ -346,5 +475,11 @@ main {
 
   #zoom-slider {
     flex: 1;
+  }
+
+  .crop-panel {
+    top: 10px;
+    left: 10px;
+    width: min(390px, calc(100vw - 20px));
   }
 }

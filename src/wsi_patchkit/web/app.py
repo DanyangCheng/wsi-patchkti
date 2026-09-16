@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import math
+import re
+import uuid
 from collections.abc import Callable, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -29,6 +31,7 @@ _STATIC_ASSETS = {
     "styles.css": (_STATIC_DIR / "styles.css").read_bytes(),
 }
 _INDEX_HTML = (_STATIC_DIR / "index.html").read_text(encoding="utf-8")
+_CROP_FILENAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$")
 
 
 def _public_metadata(slide_id: str, metadata: SlideMetadata) -> dict[str, object]:
@@ -88,6 +91,40 @@ def _parse_size(value: str, region: tuple[int, int, int, int]) -> tuple[int, int
     return width, height
 
 
+def _crop_integer(payload: Mapping[str, object], name: str) -> int:
+    value = payload.get(name)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{name} must be an integer")
+    return value
+
+
+def _crop_filename(
+    payload: Mapping[str, object],
+    *,
+    slide_id: str,
+    region: tuple[int, int, int, int],
+    image_format: str,
+) -> str:
+    extension = "jpg" if image_format == "jpg" else "png"
+    requested = payload.get("filename")
+    if requested is None or requested == "":
+        x, y, width, height = region
+        token = uuid.uuid4().hex[:10]
+        return f"{slide_id}_x{x}_y{y}_w{width}_h{height}_{token}.{extension}"
+    if not isinstance(requested, str) or not _CROP_FILENAME.fullmatch(requested):
+        raise ValueError(
+            "filename must use 1-200 letters, numbers, dots, dashes, or underscores"
+        )
+    path = Path(requested)
+    if path.suffix.lower() not in (".jpg", ".jpeg", ".png"):
+        requested = f"{requested}.{extension}"
+    elif path.suffix.lower() not in (
+        {".jpg", ".jpeg"} if extension == "jpg" else {".png"}
+    ):
+        raise ValueError("filename extension must match format")
+    return requested
+
+
 def create_app(
     slides: Mapping[str, SlideSource | str | Path],
     *,
@@ -100,6 +137,7 @@ def create_app(
     jpeg_quality: int = 85,
     max_output_pixels: int = 16_777_216,
     cache_control: str = "private, max-age=3600",
+    crop_output_dir: str | Path = "crops",
 ) -> FastAPI:
     """Create a self-contained WSI viewer for an explicit slide registry."""
     if tile_size < 1:
@@ -107,6 +145,7 @@ def create_app(
     if reader is not None and reader_factory is not None:
         raise ValueError("provide reader or reader_factory, not both")
     registry = SlideRegistry(slides)
+    crop_directory = Path(crop_output_dir).expanduser().resolve()
     if reader is not None:
         renderer = TileRenderer(
             reader,
@@ -135,6 +174,7 @@ def create_app(
     app.state.slide_registry = registry
     app.state.tile_renderer = renderer
     app.state.tile_workers = workers
+    app.state.crop_output_dir = crop_directory
 
     def source_for(slide_id: str) -> SlideSource:
         try:
@@ -181,6 +221,87 @@ def create_app(
     async def slide_metadata(slide_id: str) -> dict[str, object]:
         _, metadata = await workers.run(metadata_for, slide_id)
         return _public_metadata(slide_id, metadata)
+
+    def save_crop(
+        source: SlideSource,
+        region: tuple[int, int, int, int],
+        image_format: str,
+        filename: str,
+    ) -> None:
+        encoded = renderer.render_level0_region(
+            source.path,
+            region,
+            image_format=image_format,  # type: ignore[arg-type]
+            source_mpp=source.source_mpp,
+        )
+        crop_directory.mkdir(parents=True, exist_ok=True)
+        destination = crop_directory / filename
+        with destination.open("xb") as output:
+            output.write(encoded.content)
+
+    @app.post("/api/slides/{slide_id}/crops", name="save_crop")
+    async def save_slide_crop(
+        slide_id: str,
+        payload: dict[str, object],
+    ) -> JSONResponse:
+        source, metadata = await workers.run(metadata_for, slide_id)
+        try:
+            x = _crop_integer(payload, "x")
+            y = _crop_integer(payload, "y")
+            width = _crop_integer(payload, "width")
+            height = _crop_integer(payload, "height")
+            region = (x, y, width, height)
+            if x < 0 or y < 0 or width < 1 or height < 1:
+                raise ValueError("crop coordinates must be non-negative and sized")
+            if (
+                x + width > metadata.dimensions[0]
+                or y + height > metadata.dimensions[1]
+            ):
+                raise ValueError("crop must be fully inside the level-0 image")
+            image_format_value = payload.get("format", "png")
+            if not isinstance(image_format_value, str):
+                raise ValueError("format must be png or jpg")
+            image_format = image_format_value.lower()
+            if image_format == "jpeg":
+                image_format = "jpg"
+            if image_format not in ("png", "jpg"):
+                raise ValueError("format must be png or jpg")
+            filename = _crop_filename(
+                payload,
+                slide_id=slide_id,
+                region=region,
+                image_format=image_format,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        try:
+            await workers.run(save_crop, source, region, image_format, filename)
+        except FileExistsError as error:
+            raise HTTPException(
+                status_code=409,
+                detail="a crop with this filename already exists",
+            ) from error
+        except (ImportError, RuntimeError, ValueError) as error:
+            _LOGGER.exception("Unable to render crop for slide %s", slide_id)
+            raise HTTPException(
+                status_code=422,
+                detail="registered slide crop could not be rendered",
+            ) from error
+        except OSError as error:
+            _LOGGER.exception("Unable to save crop for slide %s", slide_id)
+            raise HTTPException(
+                status_code=500,
+                detail="crop could not be saved",
+            ) from error
+        return JSONResponse(
+            status_code=201,
+            content={
+                "filename": filename,
+                "format": image_format,
+                "level": 0,
+                "region": {"x": x, "y": y, "width": width, "height": height},
+            },
+        )
 
     @app.get("/iiif/3/{slide_id}/info.json", name="iiif_info")
     async def iiif_info(slide_id: str, request: Request) -> JSONResponse:
@@ -242,6 +363,16 @@ def create_app(
             output_size = _parse_size(size, parsed_region)
             if not all(math.isfinite(value) for value in output_size):
                 raise ValueError("invalid output size")
+            if output_size[0] * output_size[1] > max_output_pixels:
+                raise ValueError("requested output exceeds max_output_pixels")
+            if (
+                parsed_region[0] >= metadata.dimensions[0]
+                or parsed_region[1] >= metadata.dimensions[1]
+            ):
+                raise ValueError("region starts outside the image")
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        try:
             encoded = await workers.run(
                 renderer.render_region,
                 source.path,
@@ -250,8 +381,12 @@ def create_app(
                 image_format=normalized_format,
                 source_mpp=source.source_mpp,
             )
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
+        except (ImportError, OSError, RuntimeError, ValueError) as error:
+            _LOGGER.exception("Unable to render tile for slide %s", slide_id)
+            raise HTTPException(
+                status_code=422,
+                detail="registered slide tile could not be rendered",
+            ) from error
         headers = {"Cache-Control": cache_control, "ETag": encoded.etag}
         if request.headers.get("if-none-match") == encoded.etag:
             return Response(status_code=304, headers=headers)
