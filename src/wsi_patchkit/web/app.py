@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import math
 from collections.abc import Callable, Mapping
@@ -169,18 +168,14 @@ def create_app(
         return Response(
             content,
             media_type=media_type,
-            headers={"Cache-Control": "public, max-age=3600"},
+            headers={"Cache-Control": "no-cache"},
         )
 
     @app.get("/api/slides", name="list_slides")
-    async def list_slides() -> list[dict[str, object]]:
-        records = await asyncio.gather(
-            *(workers.run(metadata_for, slide_id) for slide_id in registry)
-        )
-        return [
-            _public_metadata(slide_id, record[1])
-            for slide_id, record in zip(registry, records, strict=True)
-        ]
+    async def list_slides() -> list[dict[str, str]]:
+        # Keep directory browsing responsive even for large collections. Reading
+        # WSI metadata can be expensive, so defer it until a slide is selected.
+        return [{"id": slide_id} for slide_id in registry]
 
     @app.get("/api/slides/{slide_id}", name="slide_metadata")
     async def slide_metadata(slide_id: str) -> dict[str, object]:

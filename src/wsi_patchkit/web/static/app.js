@@ -1,7 +1,13 @@
 (() => {
   "use strict";
 
-  const select = document.querySelector("#slide-select");
+  const menuButton = document.querySelector("#slide-menu-button");
+  const menu = document.querySelector("#slide-menu");
+  const currentSlideLabel = document.querySelector("#current-slide");
+  const slideFilter = document.querySelector("#slide-filter");
+  const slideCount = document.querySelector("#slide-count");
+  const slideList = document.querySelector("#slide-list");
+  const slideEmpty = document.querySelector("#slide-empty");
   const slider = document.querySelector("#zoom-slider");
   const zoomLabel = document.querySelector("#zoom-label");
   const coordinateLabel = document.querySelector("#coordinate-label");
@@ -14,6 +20,7 @@
   let slides = new Map();
   let currentSlide = null;
   let viewer = null;
+  let openSequence = 0;
 
   function showStatus(message, loading = false) {
     statusMessage.textContent = message;
@@ -73,13 +80,84 @@
     viewer.viewport.applyConstraints();
   }
 
-  function openSlide(slideId) {
-    currentSlide = slides.get(slideId);
-    if (!currentSlide) return;
+  async function openSlide(slideId) {
+    const record = slides.get(slideId);
+    if (!record) return;
+    const sequence = ++openSequence;
+    currentSlideLabel.textContent = slideId;
+    for (const item of slideList.querySelectorAll("button")) {
+      const selected = item.dataset.slideId === slideId;
+      item.classList.toggle("selected", selected);
+      item.setAttribute("aria-current", selected ? "true" : "false");
+    }
+    closeSlideMenu();
     showStatus(`正在打开 ${slideId}…`, true);
     coordinateLabel.textContent = "x — · y —";
     scale.hidden = true;
-    viewer.open(`/iiif/3/${encodeURIComponent(slideId)}/info.json`);
+    try {
+      let metadata = record;
+      if (metadata.width === undefined) {
+        const response = await fetch(`/api/slides/${encodeURIComponent(slideId)}`);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        metadata = await response.json();
+        slides.set(slideId, metadata);
+      }
+      if (sequence !== openSequence) return;
+      currentSlide = metadata;
+      viewer.open(`/iiif/3/${encodeURIComponent(slideId)}/info.json`);
+    } catch (error) {
+      if (sequence === openSequence) {
+        showStatus(`切片加载失败：${error.message}`);
+      }
+    }
+  }
+
+  function closeSlideMenu() {
+    menu.hidden = true;
+    menuButton.setAttribute("aria-expanded", "false");
+  }
+
+  function setSlideMenuOpen(open) {
+    menu.hidden = !open;
+    menuButton.setAttribute("aria-expanded", String(open));
+    if (open) {
+      slideFilter.focus();
+      const selected = slideList.querySelector("button.selected");
+      selected?.scrollIntoView({ block: "nearest" });
+    }
+  }
+
+  function filterSlides() {
+    const query = slideFilter.value.trim().toLocaleLowerCase();
+    let visible = 0;
+    for (const item of slideList.children) {
+      const matches = item.textContent.toLocaleLowerCase().includes(query);
+      item.hidden = !matches;
+      if (matches) visible += 1;
+    }
+    slideCount.textContent = query
+      ? `${visible} / ${slides.size} 张切片`
+      : `${slides.size} 张切片`;
+    slideEmpty.hidden = visible !== 0;
+  }
+
+  function populateSlideMenu(records) {
+    const fragment = document.createDocumentFragment();
+    for (const record of records) {
+      const row = document.createElement("li");
+      row.setAttribute("role", "none");
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset.slideId = record.id;
+      button.setAttribute("role", "menuitem");
+      button.textContent = record.id;
+      button.title = record.id;
+      button.addEventListener("click", () => openSlide(record.id));
+      row.append(button);
+      fragment.append(row);
+    }
+    slideList.replaceChildren(fragment);
+    filterSlides();
   }
 
   async function initialize() {
@@ -152,7 +230,17 @@
       viewer.viewport.goHome();
     });
     slider.addEventListener("input", () => setImageZoom(2 ** Number(slider.value)));
-    select.addEventListener("change", () => openSlide(select.value));
+    menuButton.addEventListener("click", () => setSlideMenuOpen(menu.hidden));
+    slideFilter.addEventListener("input", filterSlides);
+    document.addEventListener("click", (event) => {
+      if (!event.target.closest(".slide-picker")) closeSlideMenu();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !menu.hidden) {
+        closeSlideMenu();
+        menuButton.focus();
+      }
+    });
 
     try {
       const response = await fetch("/api/slides");
@@ -160,12 +248,7 @@
       const records = await response.json();
       if (!records.length) throw new Error("服务端没有注册切片");
       slides = new Map(records.map((record) => [record.id, record]));
-      for (const record of records) {
-        const option = document.createElement("option");
-        option.value = record.id;
-        option.textContent = record.id;
-        select.append(option);
-      }
+      populateSlideMenu(records);
       openSlide(records[0].id);
     } catch (error) {
       showStatus(`无法读取切片列表：${error.message}`);
@@ -174,4 +257,3 @@
 
   window.addEventListener("DOMContentLoaded", initialize);
 })();
-

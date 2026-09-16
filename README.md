@@ -58,6 +58,18 @@ uv run wsi-patchkit-viewer \
   --reader-pool-size 4
 ```
 
+To browse every supported WSI in a folder (including subfolders), register the
+directory instead. The viewer's searchable slide menu scrolls when the list is
+long:
+
+```bash
+uv run wsi-patchkit-viewer --slide-dir /data/slides
+```
+
+`--slide-dir` is repeatable and can be combined with `--slide`. Recognized file
+extensions are `.svs`, `.tif`, `.tiff`, `.ndpi`, `.mrxs`, `.scn`, `.vms`,
+`.vmu`, `.bif`, and `.qptiff`.
+
 Then open <http://127.0.0.1:8000>. The viewer supports mouse-wheel and pinch
 zooming, drag panning, double-click zooming, a navigator, level-0 coordinates,
 and an MPP-aware scale bar. TIFF files use the bundled tifffile reader; other

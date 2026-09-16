@@ -4,12 +4,12 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>WSI PatchKit Viewer</title>
-    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="/static/styles.css?v=2" />
     <script
       src="https://cdn.jsdelivr.net/npm/openseadragon@5.0.1/build/openseadragon/openseadragon.min.js"
       defer
     ></script>
-    <script src="/static/app.js" defer></script>
+    <script src="/static/app.js?v=2" defer></script>
   </head>
   <body>
     <header class="toolbar">
@@ -21,10 +21,29 @@
         </div>
       </div>
 
-      <label class="slide-picker">
+      <div class="slide-picker">
         <span>切片</span>
-        <select id="slide-select" aria-label="选择切片"></select>
-      </label>
+        <button
+          id="slide-menu-button"
+          type="button"
+          aria-haspopup="true"
+          aria-expanded="false"
+          aria-controls="slide-menu"
+        >
+          <span id="current-slide">选择切片</span><i aria-hidden="true">▾</i>
+        </button>
+        <div id="slide-menu" class="slide-menu" hidden>
+          <input
+            id="slide-filter"
+            type="search"
+            placeholder="搜索切片…"
+            aria-label="搜索切片"
+          />
+          <div id="slide-count" class="slide-count"></div>
+          <ul id="slide-list" role="menu" aria-label="切片列表"></ul>
+          <p id="slide-empty" class="slide-empty" hidden>没有匹配的切片</p>
+        </div>
+      </div>
 
       <div class="zoom-control">
         <button id="zoom-out" type="button" aria-label="缩小">−</button>
@@ -61,4 +80,3 @@
     </main>
   </body>
 </html>
-

@@ -80,24 +80,19 @@ body {
 }
 
 .slide-picker {
+  position: relative;
   gap: 8px;
-  min-width: 170px;
+  min-width: 220px;
   color: #9ca9ba;
   font-size: 12px;
 }
 
-select,
 button {
   height: 34px;
   border: 1px solid #343f4f;
   border-radius: 7px;
   background: #171d26;
   color: #e8edf5;
-}
-
-select {
-  min-width: 130px;
-  padding: 0 30px 0 10px;
 }
 
 button {
@@ -112,10 +107,104 @@ button:hover {
 }
 
 button:focus-visible,
-select:focus-visible,
 input:focus-visible {
   outline: 2px solid #6be2c5;
   outline-offset: 2px;
+}
+
+#slide-menu-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: min(300px, 28vw);
+  min-width: 160px;
+  text-align: left;
+}
+
+#slide-menu-button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#slide-menu-button i {
+  color: #8492a5;
+  font-style: normal;
+}
+
+.slide-menu {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 12px);
+  left: 35px;
+  width: min(380px, calc(100vw - 24px));
+  padding: 10px;
+  border: 1px solid #354152;
+  border-radius: 10px;
+  background: rgb(18 24 32 / 98%);
+  box-shadow: 0 18px 50px rgb(0 0 0 / 48%);
+}
+
+.slide-menu[hidden] {
+  display: none;
+}
+
+#slide-filter {
+  width: 100%;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid #343f4f;
+  border-radius: 7px;
+  background: #10151c;
+  color: #e8edf5;
+}
+
+.slide-count {
+  padding: 8px 4px 5px;
+  color: #7f8da0;
+  font-size: 11px;
+}
+
+#slide-list {
+  max-height: min(55vh, 440px);
+  margin: 0;
+  padding: 0 3px 0 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  list-style: none;
+  scrollbar-color: #536276 #171d26;
+  scrollbar-width: thin;
+}
+
+#slide-list li[hidden] {
+  display: none;
+}
+
+#slide-list button {
+  width: 100%;
+  overflow: hidden;
+  border-color: transparent;
+  background: transparent;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#slide-list button:hover,
+#slide-list button.selected {
+  border-color: #38594f;
+  background: #182c27;
+}
+
+#slide-list button.selected {
+  color: #7ce8cc;
+}
+
+.slide-empty {
+  margin: 14px 0 8px;
+  color: #8592a5;
+  text-align: center;
 }
 
 .zoom-control {
@@ -242,6 +331,14 @@ main {
     flex: 1;
   }
 
+  #slide-menu-button {
+    width: 100%;
+  }
+
+  .slide-menu {
+    left: 0;
+  }
+
   .zoom-control {
     order: 3;
     width: 100%;
@@ -251,4 +348,3 @@ main {
     flex: 1;
   }
 }
-
