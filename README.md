@@ -81,7 +81,10 @@ Select **矩形裁剪** to place a rectangle on the slide, enter its exact level
 read directly from pyramid level 0 without rescaling. The server stores them in
 `--crop-output-dir` (the default is `./crops`) and never overwrites an existing
 file. The viewer remembers the most recently entered crop width and height when
-switching slides or reloading the page.
+switching slides or reloading the page. Saving submits work to a background
+queue, so another crop can be positioned and submitted while earlier jobs are
+still running. One crop worker is used by default; use `--crop-workers N` to
+change the background concurrency.
 
 Applications can embed the viewer server instead of using the CLI:
 

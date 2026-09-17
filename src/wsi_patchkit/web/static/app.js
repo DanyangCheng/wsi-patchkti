@@ -65,6 +65,8 @@
 
   let preferredCropSize = loadCropSize();
   let cropRegion = { x: 0, y: 0, ...preferredCropSize };
+  const pendingCropJobs = new Map();
+  let latestCropResult = null;
 
   function showStatus(message, loading = false) {
     statusMessage.textContent = message;
@@ -127,6 +129,60 @@
   function setCropStatus(message, type = "") {
     cropStatus.textContent = message;
     cropStatus.className = `crop-status ${type}`.trim();
+  }
+
+  function updateCropQueueStatus() {
+    if (pendingCropJobs.size) {
+      const jobs = [...pendingCropJobs.values()];
+      const running = jobs.filter((job) => job.status === "running").length;
+      const queued = jobs.filter((job) => job.status === "queued").length;
+      const checking = jobs.length - running - queued;
+      const parts = [];
+      if (running) parts.push(`${running} 个处理中`);
+      if (queued) parts.push(`${queued} 个排队中`);
+      if (checking) parts.push(`${checking} 个等待状态`);
+      setCropStatus(`状态：${parts.join(" · ")}`);
+      return;
+    }
+    if (latestCropResult) {
+      setCropStatus(latestCropResult.message, latestCropResult.type);
+    }
+  }
+
+  async function pollCropJob(slideId, jobId) {
+    const job = pendingCropJobs.get(jobId);
+    if (!job) return;
+    try {
+      const response = await fetch(
+        `/api/slides/${encodeURIComponent(slideId)}/crops/${encodeURIComponent(jobId)}`,
+      );
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.detail || `HTTP ${response.status}`);
+      if (result.status === "completed") {
+        pendingCropJobs.delete(jobId);
+        latestCropResult = {
+          message: `已保存到服务器：${result.filename}`,
+          type: "success",
+        };
+        updateCropQueueStatus();
+        return;
+      }
+      if (result.status === "failed") {
+        pendingCropJobs.delete(jobId);
+        latestCropResult = {
+          message: `${result.filename} 保存失败：${result.error || "未知错误"}`,
+          type: "error",
+        };
+        updateCropQueueStatus();
+        return;
+      }
+      job.status = result.status;
+      updateCropQueueStatus();
+    } catch (error) {
+      job.status = "checking";
+      updateCropQueueStatus();
+    }
+    window.setTimeout(() => pollCropJob(slideId, jobId), 500);
   }
 
   function updateCropOverlay() {
@@ -230,11 +286,11 @@
 
   async function saveCrop() {
     if (!currentSlide || !cropActive) return;
-    cropSave.disabled = true;
-    setCropStatus("正在生成 level-0 裁剪并保存…");
+    setCropStatus("正在提交 level-0 裁剪任务…");
     try {
+      const slideId = currentSlide.id;
       const response = await fetch(
-        `/api/slides/${encodeURIComponent(currentSlide.id)}/crops`,
+        `/api/slides/${encodeURIComponent(slideId)}/crops`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -248,11 +304,18 @@
       const result = await response.json();
       if (!response.ok) throw new Error(result.detail || `HTTP ${response.status}`);
       cropFilename.value = "";
-      setCropStatus(`已保存到服务器：${result.filename}`, "success");
+      pendingCropJobs.set(result.job_id, {
+        filename: result.filename,
+        status: result.status,
+      });
+      updateCropQueueStatus();
+      pollCropJob(slideId, result.job_id);
     } catch (error) {
-      setCropStatus(`保存失败：${error.message}`, "error");
-    } finally {
-      cropSave.disabled = false;
+      latestCropResult = {
+        message: `任务提交失败：${error.message}`,
+        type: "error",
+      };
+      updateCropQueueStatus();
     }
   }
 

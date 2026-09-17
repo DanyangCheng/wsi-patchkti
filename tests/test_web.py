@@ -92,6 +92,17 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
+async def _wait_for_crop(client, slide_id: str, job_id: str) -> dict[str, object]:
+    for _ in range(200):
+        response = await client.get(f"/api/slides/{slide_id}/crops/{job_id}")
+        assert response.status_code == 200
+        result = response.json()
+        if result["status"] in ("completed", "failed"):
+            return result
+        await asyncio.sleep(0.01)
+    pytest.fail("crop job did not finish")
+
+
 @pytest.mark.anyio
 async def test_viewer_serves_metadata_tiles_and_frontend(tmp_path: Path) -> None:
     path = tmp_path / "slide.tif"
@@ -129,11 +140,12 @@ async def test_viewer_serves_metadata_tiles_and_frontend(tmp_path: Path) -> None
     assert cached.status_code == 304
     assert index.status_code == 200
     assert "WSI PatchKit Viewer" in index.text
-    assert "/static/app.js?v=4" in index.text
+    assert "/static/app.js?v=5" in index.text
     assert script.status_code == 200
     assert "dragToPan" in script.text
     assert "populateSlideMenu" in script.text
     assert "saveCrop" in script.text
+    assert "pollCropJob" in script.text
     assert "wsi-patchkit.crop-size" in script.text
 
 
@@ -164,14 +176,20 @@ async def test_level0_crop_is_saved_on_server(tmp_path: Path) -> None:
                 "filename": "manual-crop.png",
             },
         )
+        assert response.status_code == 202
+        submitted = response.json()
+        completed = await _wait_for_crop(client, "case-001", submitted["job_id"])
 
-    assert response.status_code == 201
-    assert response.json() == {
+    assert submitted == {
+        "job_id": submitted["job_id"],
+        "status": "queued",
+        "slide_id": "case-001",
         "filename": "manual-crop.png",
         "format": "png",
         "level": 0,
         "region": {"x": 3, "y": 4, "width": 6, "height": 5},
     }
+    assert completed["status"] == "completed"
     destination = output_dir / "manual-crop.png"
     assert destination.is_file()
     expected = np.arange(16 * 20 * 3, dtype=np.uint8).reshape(16, 20, 3)
@@ -179,6 +197,100 @@ async def test_level0_crop_is_saved_on_server(tmp_path: Path) -> None:
         np.asarray(Image.open(destination)),
         expected[4:9, 3:9],
     )
+
+
+@pytest.mark.anyio
+async def test_crop_requests_queue_without_waiting_for_previous_save(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "slide.tif"
+    output_dir = tmp_path / "saved-crops"
+    _write_slide(path)
+    started = threading.Event()
+    release = threading.Event()
+
+    class BlockingReader:
+        def __init__(self) -> None:
+            self.delegate = TiffReader()
+
+        def metadata(self, value, *, source_mpp=None):
+            return self.delegate.metadata(value, source_mpp=source_mpp)
+
+        def read_region(self, value, location, level, size):
+            started.set()
+            if not release.wait(timeout=2):
+                raise TimeoutError("test did not release crop reader")
+            return self.delegate.read_region(value, location, level, size)
+
+        def close(self) -> None:
+            self.delegate.close()
+
+    app = create_app(
+        {"case-001": path},
+        reader=BlockingReader(),
+        crop_output_dir=output_dir,
+        crop_workers=1,
+    )
+    transport = httpx.ASGITransport(app=app)
+    try:
+        async with app.router.lifespan_context(app), httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as client:
+            first = await client.post(
+                "/api/slides/case-001/crops",
+                json={
+                    "x": 0,
+                    "y": 0,
+                    "width": 3,
+                    "height": 3,
+                    "filename": "first.png",
+                },
+            )
+            assert first.status_code == 202
+            for _ in range(100):
+                if started.is_set():
+                    break
+                await asyncio.sleep(0.01)
+            assert started.is_set()
+
+            second = await client.post(
+                "/api/slides/case-001/crops",
+                json={
+                    "x": 3,
+                    "y": 3,
+                    "width": 3,
+                    "height": 3,
+                    "filename": "second.png",
+                },
+            )
+            assert second.status_code == 202
+            first_status = await client.get(
+                f"/api/slides/case-001/crops/{first.json()['job_id']}"
+            )
+            second_status = await client.get(
+                f"/api/slides/case-001/crops/{second.json()['job_id']}"
+            )
+            assert first_status.json()["status"] == "running"
+            assert second_status.json()["status"] == "queued"
+
+            release.set()
+            first_done = await _wait_for_crop(
+                client,
+                "case-001",
+                first.json()["job_id"],
+            )
+            second_done = await _wait_for_crop(
+                client,
+                "case-001",
+                second.json()["job_id"],
+            )
+            assert first_done["status"] == "completed"
+            assert second_done["status"] == "completed"
+    finally:
+        release.set()
+
+    assert {path.name for path in output_dir.iterdir()} == {"first.png", "second.png"}
 
 
 @pytest.mark.anyio

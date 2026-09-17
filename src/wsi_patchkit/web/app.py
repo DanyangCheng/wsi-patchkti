@@ -21,6 +21,7 @@ except ImportError as error:  # pragma: no cover - exercised without the web ext
 from ..io import AutoSlideReader, SlideReader
 from ..tiles import TileRenderer, iiif_scale_factors
 from ..types import SlideMetadata
+from .crops import CropJobQueue
 from .registry import SlideRegistry, SlideSource
 from .workers import TileWorkerPool
 
@@ -138,12 +139,15 @@ def create_app(
     max_output_pixels: int = 16_777_216,
     cache_control: str = "private, max-age=3600",
     crop_output_dir: str | Path = "crops",
+    crop_workers: int = 1,
 ) -> FastAPI:
     """Create a self-contained WSI viewer for an explicit slide registry."""
     if tile_size < 1:
         raise ValueError("tile_size must be positive")
     if reader is not None and reader_factory is not None:
         raise ValueError("provide reader or reader_factory, not both")
+    if crop_workers < 1:
+        raise ValueError("crop_workers must be positive")
     registry = SlideRegistry(slides)
     crop_directory = Path(crop_output_dir).expanduser().resolve()
     if reader is not None:
@@ -163,10 +167,16 @@ def create_app(
         )
     worker_count = reader_pool_size if tile_workers is None else tile_workers
     workers = TileWorkerPool(worker_count)
+    crop_jobs = CropJobQueue(
+        renderer,
+        crop_directory,
+        worker_count=crop_workers,
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         yield
+        crop_jobs.close()
         workers.close()
         renderer.close()
 
@@ -175,6 +185,7 @@ def create_app(
     app.state.tile_renderer = renderer
     app.state.tile_workers = workers
     app.state.crop_output_dir = crop_directory
+    app.state.crop_jobs = crop_jobs
 
     def source_for(slide_id: str) -> SlideSource:
         try:
@@ -222,23 +233,6 @@ def create_app(
         _, metadata = await workers.run(metadata_for, slide_id)
         return _public_metadata(slide_id, metadata)
 
-    def save_crop(
-        source: SlideSource,
-        region: tuple[int, int, int, int],
-        image_format: str,
-        filename: str,
-    ) -> None:
-        encoded = renderer.render_level0_region(
-            source.path,
-            region,
-            image_format=image_format,  # type: ignore[arg-type]
-            source_mpp=source.source_mpp,
-        )
-        crop_directory.mkdir(parents=True, exist_ok=True)
-        destination = crop_directory / filename
-        with destination.open("xb") as output:
-            output.write(encoded.content)
-
     @app.post("/api/slides/{slide_id}/crops", name="save_crop")
     async def save_slide_crop(
         slide_id: str,
@@ -275,33 +269,35 @@ def create_app(
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         try:
-            await workers.run(save_crop, source, region, image_format, filename)
+            job = crop_jobs.submit(
+                slide_id=slide_id,
+                source=source,
+                region=region,
+                image_format=image_format,  # type: ignore[arg-type]
+                filename=filename,
+            )
         except FileExistsError as error:
             raise HTTPException(
                 status_code=409,
                 detail="a crop with this filename already exists",
             ) from error
-        except (ImportError, RuntimeError, ValueError) as error:
-            _LOGGER.exception("Unable to render crop for slide %s", slide_id)
+        except RuntimeError as error:
             raise HTTPException(
-                status_code=422,
-                detail="registered slide crop could not be rendered",
+                status_code=503,
+                detail="crop queue is unavailable",
             ) from error
-        except OSError as error:
-            _LOGGER.exception("Unable to save crop for slide %s", slide_id)
+        return JSONResponse(status_code=202, content=job)
+
+    @app.get("/api/slides/{slide_id}/crops/{job_id}", name="crop_status")
+    async def crop_status(slide_id: str, job_id: str) -> dict[str, object]:
+        source_for(slide_id)
+        try:
+            return crop_jobs.get(job_id, slide_id=slide_id)
+        except KeyError as error:
             raise HTTPException(
-                status_code=500,
-                detail="crop could not be saved",
+                status_code=404,
+                detail="unknown crop job",
             ) from error
-        return JSONResponse(
-            status_code=201,
-            content={
-                "filename": filename,
-                "format": image_format,
-                "level": 0,
-                "region": {"x": x, "y": y, "width": width, "height": height},
-            },
-        )
 
     @app.get("/iiif/3/{slide_id}/info.json", name="iiif_info")
     async def iiif_info(slide_id: str, request: Request) -> JSONResponse:

@@ -102,6 +102,13 @@ def main() -> None:
         metavar="PATH",
         help="save level-0 rectangular crops in this server-side directory",
     )
+    parser.add_argument(
+        "--crop-workers",
+        default=1,
+        type=int,
+        metavar="N",
+        help="number of background crop workers (default: 1)",
+    )
     args = parser.parse_args()
 
     try:
@@ -126,6 +133,7 @@ def main() -> None:
         tile_size=args.tile_size,
         reader_pool_size=args.reader_pool_size,
         crop_output_dir=args.crop_output_dir,
+        crop_workers=args.crop_workers,
     )
     uvicorn.run(app, host=args.host, port=args.port)
 
