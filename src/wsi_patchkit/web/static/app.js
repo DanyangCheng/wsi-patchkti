@@ -1,6 +1,7 @@
 (() => {
   "use strict";
 
+  const cropSizeStorageKey = "wsi-patchkit.crop-size";
   const menuButton = document.querySelector("#slide-menu-button");
   const menu = document.querySelector("#slide-menu");
   const currentSlideLabel = document.querySelector("#current-slide");
@@ -36,7 +37,34 @@
   let openSequence = 0;
   let cropActive = false;
   let cropOverlayAdded = false;
-  let cropRegion = { x: 0, y: 0, width: 1024, height: 1024 };
+
+  function loadCropSize() {
+    try {
+      const value = JSON.parse(localStorage.getItem(cropSizeStorageKey));
+      if (
+        Number.isInteger(value?.width) &&
+        value.width > 0 &&
+        Number.isInteger(value?.height) &&
+        value.height > 0
+      ) {
+        return value;
+      }
+    } catch (_) {
+      // Storage may be unavailable or contain data from an older version.
+    }
+    return { width: 1024, height: 1024 };
+  }
+
+  function saveCropSize(size) {
+    try {
+      localStorage.setItem(cropSizeStorageKey, JSON.stringify(size));
+    } catch (_) {
+      // Keep the in-memory preference when persistent storage is unavailable.
+    }
+  }
+
+  let preferredCropSize = loadCropSize();
+  let cropRegion = { x: 0, y: 0, ...preferredCropSize };
 
   function showStatus(message, loading = false) {
     statusMessage.textContent = message;
@@ -157,8 +185,8 @@
     const item = currentItem();
     if (!item || !currentSlide) return;
     const center = item.viewportToImageCoordinates(viewer.viewport.getCenter(true));
-    const width = Math.min(1024, currentSlide.width);
-    const height = Math.min(1024, currentSlide.height);
+    const width = Math.min(preferredCropSize.width, currentSlide.width);
+    const height = Math.min(preferredCropSize.height, currentSlide.height);
     setCropRegion({
       x: center.x - width / 2,
       y: center.y - height / 2,
@@ -192,6 +220,11 @@
       width: values[2],
       height: values[3],
     });
+    preferredCropSize = {
+      width: cropRegion.width,
+      height: cropRegion.height,
+    };
+    saveCropSize(preferredCropSize);
     setCropStatus("");
   }
 

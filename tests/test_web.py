@@ -129,11 +129,12 @@ async def test_viewer_serves_metadata_tiles_and_frontend(tmp_path: Path) -> None
     assert cached.status_code == 304
     assert index.status_code == 200
     assert "WSI PatchKit Viewer" in index.text
-    assert "/static/app.js?v=3" in index.text
+    assert "/static/app.js?v=4" in index.text
     assert script.status_code == 200
     assert "dragToPan" in script.text
     assert "populateSlideMenu" in script.text
     assert "saveCrop" in script.text
+    assert "wsi-patchkit.crop-size" in script.text
 
 
 @pytest.mark.anyio

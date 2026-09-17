@@ -80,7 +80,8 @@ Select **矩形裁剪** to place a rectangle on the slide, enter its exact level
 `x`, `y`, width, and height, and save a PNG or JPEG on the server. Crops are
 read directly from pyramid level 0 without rescaling. The server stores them in
 `--crop-output-dir` (the default is `./crops`) and never overwrites an existing
-file.
+file. The viewer remembers the most recently entered crop width and height when
+switching slides or reloading the page.
 
 Applications can embed the viewer server instead of using the CLI:
 
