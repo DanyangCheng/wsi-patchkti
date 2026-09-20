@@ -27,6 +27,7 @@ class OpenSlideReader:
             ) from error
         self.cache_size = int(cache_size)
         self._openslide = openslide
+        # LRU cache queue
         self._slides: OrderedDict[str, Any] = OrderedDict()
 
     @staticmethod

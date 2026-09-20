@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
+from typing import Literal
 
 MPP = tuple[float, float]
 Size = tuple[int, int]
@@ -191,6 +192,8 @@ class SamplingContext:
     world_size: int = 1
     worker_id: int = 0
     num_workers: int = 1
+    shard_policy: Literal["uneven", "drop", "pad"] = "uneven"
+    start_index: int = 0
 
     def __post_init__(self) -> None:
         if self.epoch < 0:
@@ -201,6 +204,10 @@ class SamplingContext:
             raise ValueError("rank must be in [0, world_size)")
         if not 0 <= self.worker_id < self.num_workers:
             raise ValueError("worker_id must be in [0, num_workers)")
+        if self.shard_policy not in ("uneven", "drop", "pad"):
+            raise ValueError("shard_policy must be 'uneven', 'drop', or 'pad'")
+        if self.start_index < 0:
+            raise ValueError("start_index must be non-negative")
 
     @property
     def shard_index(self) -> int:
@@ -212,3 +219,74 @@ class SamplingContext:
 
     def owns(self, global_index: int) -> bool:
         return global_index % self.shard_count == self.shard_index
+
+    def indices(self, total: int) -> range:
+        """Return this shard's virtual global indices for ``total`` samples.
+
+        ``uneven`` preserves the historical modulo sharding behaviour. ``drop``
+        removes a short final round, while ``pad`` repeats requests from the
+        start of the global sequence so every rank and worker receives the same
+        number of requests. ``start_index`` is a virtual global cursor and can
+        be checkpointed to resume a deterministic stream.
+        """
+        if total < 0:
+            raise ValueError("total must be non-negative")
+        if self.shard_policy == "drop":
+            stop = total - total % self.shard_count
+        elif self.shard_policy == "pad":
+            stop = (
+                (total + self.shard_count - 1) // self.shard_count
+            ) * self.shard_count
+        else:
+            stop = total
+        first = max(self.start_index, self.shard_index)
+        remainder = (first - self.shard_index) % self.shard_count
+        if remainder:
+            first += self.shard_count - remainder
+        return range(first, stop, self.shard_count)
+
+    @staticmethod
+    def source_index(virtual_index: int, total: int) -> int:
+        """Map a padded virtual index to the original global sequence."""
+        if total < 1:
+            raise ValueError("total must be positive")
+        if virtual_index < 0:
+            raise ValueError("virtual_index must be non-negative")
+        return virtual_index % total
+
+    def state_dict(self) -> dict[str, int | str]:
+        """Serialize the deterministic sharding and resume cursor state."""
+        return {
+            "epoch": self.epoch,
+            "rank": self.rank,
+            "world_size": self.world_size,
+            "worker_id": self.worker_id,
+            "num_workers": self.num_workers,
+            "shard_policy": self.shard_policy,
+            "start_index": self.start_index,
+        }
+
+    @classmethod
+    def from_state_dict(cls, state: Mapping[str, object]) -> SamplingContext:
+        """Restore a context previously emitted by :meth:`state_dict`."""
+        required = {
+            "epoch",
+            "rank",
+            "world_size",
+            "worker_id",
+            "num_workers",
+            "shard_policy",
+            "start_index",
+        }
+        missing = required.difference(state)
+        if missing:
+            raise ValueError(f"sampling context state is missing {sorted(missing)!r}")
+        values = {name: state[name] for name in required}
+        if any(
+            isinstance(values[name], bool) or not isinstance(values[name], int)
+            for name in required - {"shard_policy"}
+        ):
+            raise ValueError("sampling context integer fields must be integers")
+        if not isinstance(values["shard_policy"], str):
+            raise ValueError("sampling context shard_policy must be a string")
+        return cls(**values)  # type: ignore[arg-type]

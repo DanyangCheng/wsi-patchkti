@@ -104,6 +104,68 @@ def test_random_worker_shards_rebuild_the_global_sample_set() -> None:
     assert rebuilt == full
 
 
+def test_padded_shards_have_equal_lengths_and_repeat_from_the_start() -> None:
+    requests = tuple(PatchRequest("slide.tif", x, 0, 2, 2, 0.5) for x in range(5))
+    sampler = IndexedSampler(requests)
+
+    shards = [
+        list(
+            sampler.sample(
+                context=SamplingContext(
+                    worker_id=worker,
+                    num_workers=3,
+                    shard_policy="pad",
+                )
+            )
+        )
+        for worker in range(3)
+    ]
+
+    assert [len(shard) for shard in shards] == [2, 2, 2]
+    assert [[request.x for request in shard] for shard in shards] == [
+        [0, 3],
+        [1, 4],
+        [2, 0],
+    ]
+
+
+def test_dropped_shards_have_equal_lengths_without_repeating() -> None:
+    requests = tuple(PatchRequest("slide.tif", x, 0, 2, 2, 0.5) for x in range(5))
+    sampler = IndexedSampler(requests)
+
+    shards = [
+        list(
+            sampler.sample(
+                context=SamplingContext(
+                    worker_id=worker,
+                    num_workers=3,
+                    shard_policy="drop",
+                )
+            )
+        )
+        for worker in range(3)
+    ]
+
+    assert [len(shard) for shard in shards] == [1, 1, 1]
+    assert [[request.x for request in shard] for shard in shards] == [[0], [1], [2]]
+
+
+def test_sampling_context_state_resumes_a_padded_sequence() -> None:
+    requests = tuple(PatchRequest("slide.tif", x, 0, 2, 2, 0.5) for x in range(5))
+    context = SamplingContext(
+        worker_id=1,
+        num_workers=3,
+        shard_policy="pad",
+        start_index=4,
+    )
+
+    restored = SamplingContext.from_state_dict(context.state_dict())
+
+    assert restored == context
+    resumed = list(IndexedSampler(requests).sample(context=restored))
+    assert [request.x for request in resumed] == [4]
+
+
 def test_indexed_sampling_validates_and_shards_requests() -> None:
     requests = tuple(PatchRequest("slide.tif", x, 0, 2, 2, 0.5) for x in range(5))
     sampler = IndexedSampler(requests)

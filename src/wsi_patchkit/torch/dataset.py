@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import torch
@@ -18,7 +18,13 @@ from ..types import Patch, SamplingContext, SlideSpec
 
 
 class WSIPatchIterableDataset(IterableDataset[Mapping[str, Any]]):
-    """Materialize sampler requests with one reader per DataLoader worker."""
+    """Materialize sampler requests with one reader per DataLoader worker.
+
+    By default, the final global sampling round is padded so every distributed
+    rank and DataLoader worker receives an equal number of requests. Padding
+    repeats deterministic requests from the start of the epoch. This prevents a
+    short rank from ending a DDP iteration early.
+    """
 
     def __init__(
         self,
@@ -29,36 +35,110 @@ class WSIPatchIterableDataset(IterableDataset[Mapping[str, Any]]):
         tissue_filter: TissueFilter | None = None,
         transform: Callable[[Patch], Mapping[str, Any]] | None = None,
         epoch: int = 0,
+        even_shards: Literal["pad", "drop", "none"] = "pad",
+        start_index: int = 0,
     ) -> None:
         super().__init__()
         if not slides:
             raise ValueError("slides must not be empty")
         if epoch < 0:
             raise ValueError("epoch must be non-negative")
+        if start_index < 0:
+            raise ValueError("start_index must be non-negative")
+        if even_shards not in ("pad", "drop", "none"):
+            raise ValueError("even_shards must be 'pad', 'drop', or 'none'")
+        if tissue_filter is not None and even_shards != "none":
+            raise ValueError(
+                "TissueFilter runs after sharding and cannot guarantee equal "
+                "DDP lengths; use even_shards='none' or a tissue-aware sampler"
+            )
         self.slides = tuple(slides)
         self.sampler = sampler
         self.reader_factory = reader_factory
         self.tissue_filter = tissue_filter
         self.transform = transform
-        self.epoch = int(epoch)
+        self.even_shards = even_shards
+        # A shared tensor keeps set_epoch visible to persistent DataLoader
+        # workers under both fork and spawn multiprocessing start methods.
+        self._sampling_state = torch.tensor(
+            [epoch, start_index], dtype=torch.int64
+        ).share_memory_()
 
-    def set_epoch(self, epoch: int) -> None:
-        """Select the deterministic random stream for the next iteration."""
+    @property
+    def epoch(self) -> int:
+        """The epoch currently visible to all workers."""
+        return int(self._sampling_state[0].item())
+
+    @property
+    def start_index(self) -> int:
+        """The next virtual global sampler index used on iteration."""
+        return int(self._sampling_state[1].item())
+
+    def set_epoch(self, epoch: int, *, start_index: int = 0) -> None:
+        """Select a deterministic epoch and optional resume cursor.
+
+        Call this before creating a new DataLoader iterator. ``start_index`` is
+        a virtual global index as defined by :class:`SamplingContext`; callers
+        should checkpoint it at a synchronized training-step boundary.
+        """
         if epoch < 0:
             raise ValueError("epoch must be non-negative")
-        self.epoch = int(epoch)
+        if start_index < 0:
+            raise ValueError("start_index must be non-negative")
+        self._sampling_state[0] = epoch
+        self._sampling_state[1] = start_index
+
+    def set_start_index(self, start_index: int) -> None:
+        """Set the checkpoint resume cursor without changing the epoch."""
+        self.set_epoch(self.epoch, start_index=start_index)
+
+    def state_dict(self) -> dict[str, int | str]:
+        """Return checkpointable epoch and sampler-cursor state.
+
+        The caller owns advancing ``start_index`` while consuming batches. This
+        is deliberate: DataLoader prefetching means a worker-local iterator
+        cannot reliably identify the last optimizer step committed by training.
+        """
+        return {
+            "epoch": self.epoch,
+            "start_index": self.start_index,
+            "even_shards": self.even_shards,
+        }
+
+    def load_state_dict(self, state: Mapping[str, object]) -> None:
+        """Restore state returned by :meth:`state_dict`."""
+        try:
+            epoch = state["epoch"]
+            start_index = state["start_index"]
+            even_shards = state["even_shards"]
+        except KeyError as error:
+            raise ValueError(f"dataset state is missing {error.args[0]!r}") from error
+        if isinstance(epoch, bool) or not isinstance(epoch, int):
+            raise ValueError("dataset state epoch must be an integer")
+        if isinstance(start_index, bool) or not isinstance(start_index, int):
+            raise ValueError("dataset state start_index must be an integer")
+        if even_shards != self.even_shards:
+            raise ValueError(
+                "dataset state even_shards does not match this dataset instance"
+            )
+        self.set_epoch(epoch, start_index=start_index)
 
     def _context(self) -> SamplingContext:
         worker = get_worker_info()
         worker_id = 0 if worker is None else worker.id
         num_workers = 1 if worker is None else worker.num_workers
         distributed = dist.is_available() and dist.is_initialized()
+        shard_policy = {"pad": "pad", "drop": "drop", "none": "uneven"}[
+            self.even_shards
+        ]
         return SamplingContext(
             epoch=self.epoch,
             rank=dist.get_rank() if distributed else 0,
             world_size=dist.get_world_size() if distributed else 1,
             worker_id=worker_id,
             num_workers=num_workers,
+            shard_policy=shard_policy,
+            start_index=self.start_index,
         )
 
     @staticmethod

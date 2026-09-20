@@ -45,9 +45,8 @@ class RandomSampler:
             raise ValueError("at least one slide must have positive weight")
         probabilities = weights / weights.sum()
         patch_width, patch_height = self.patch_size
-        for global_index in range(self.num_samples):
-            if not context.owns(global_index):
-                continue
+        for virtual_index in context.indices(self.num_samples):
+            global_index = context.source_index(virtual_index, self.num_samples)
             rng = np.random.default_rng(
                 np.random.SeedSequence([self.seed, context.epoch, global_index])
             )

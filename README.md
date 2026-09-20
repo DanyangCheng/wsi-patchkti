@@ -198,6 +198,31 @@ dataset = WSIPatchIterableDataset(
 Each worker creates and closes its own reader. Items contain a float32 CHW
 `image` tensor in `[0, 1]` plus the original `PatchRequest`.
 
+### Distributed training and checkpoints
+
+`WSIPatchIterableDataset` pads the final global sampling round by default, so
+every distributed rank and DataLoader worker receives the same number of
+requests. Padding repeats deterministic requests from the start of the epoch.
+Pass `even_shards="drop"` to discard the short final round, or
+`even_shards="none"` to retain the historical uneven behaviour.
+
+Call `dataset.set_epoch(epoch)` before each new DataLoader iteration. The epoch
+is stored in shared memory, so the new random stream is visible when PyTorch
+uses `persistent_workers=True`.
+
+The dataset exposes `state_dict()` / `load_state_dict()` and
+`SamplingContext` exposes `state_dict()` / `from_state_dict()` for saving the
+epoch and a virtual global resume cursor. Recreate the same slides and sampler
+configuration before restoring the state. A training loop must set the cursor
+itself at a synchronized optimizer-step boundary; worker prefetching prevents
+a data iterator from knowing which prefetched samples were actually committed
+by the optimizer.
+
+`TissueFilter` deliberately remains a post-sampling filter. It can produce an
+unequal number of samples per shard, so the dataset rejects it together with
+the default equal-shard modes. Use `even_shards="none"` for exploratory runs or
+provide a tissue-aware sampler that generates a fixed number of valid requests.
+
 ## Development
 
 ```bash

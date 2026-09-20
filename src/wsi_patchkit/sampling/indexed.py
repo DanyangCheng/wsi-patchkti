@@ -47,17 +47,16 @@ class IndexedSampler:
         del slides
         context = context or SamplingContext()
         if self.num_samples is None:
-            for index, request in enumerate(self.requests):
-                if context.owns(index):
-                    yield request
+            total = len(self.requests)
+            for virtual_index in context.indices(total):
+                yield self.requests[context.source_index(virtual_index, total)]
             return
         probabilities = None
         if self.weights is not None:
             probabilities = np.asarray(self.weights, dtype=np.float64)
             probabilities /= probabilities.sum()
-        for global_index in range(self.num_samples):
-            if not context.owns(global_index):
-                continue
+        for virtual_index in context.indices(self.num_samples):
+            global_index = context.source_index(virtual_index, self.num_samples)
             rng = np.random.default_rng(
                 np.random.SeedSequence([self.seed, context.epoch, global_index])
             )
