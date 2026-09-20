@@ -42,6 +42,35 @@ def test_torch_dataset_returns_chw_float_tensor(tmp_path: Path) -> None:
     torch.testing.assert_close(item["image"], torch.full((3, 2, 2), 128 / 255))
 
 
+def test_torch_dataset_passes_area_interpolation_to_patch_stream(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "checkerboard.tif"
+    image = (
+        (np.indices((4, 4)).sum(axis=0) % 2 * 255)
+        .astype(np.uint8)[..., None]
+        .repeat(3, axis=2)
+    )
+    tifffile.imwrite(
+        path,
+        image,
+        photometric="rgb",
+        resolution=(40_000, 40_000),
+        resolutionunit="CENTIMETER",
+        metadata=None,
+    )
+    dataset = WSIPatchIterableDataset(
+        [SlideSpec(path, canvas_size=(2, 2), target_mpp=0.5)],
+        GridSampler(2),
+        reader_factory=TiffReader,
+        interpolation="area",
+    )
+
+    item = next(iter(dataset))
+
+    torch.testing.assert_close(item["image"], torch.full((3, 2, 2), 128 / 255))
+
+
 def test_dataset_epoch_is_visible_to_persistent_workers(tmp_path: Path) -> None:
     path = tmp_path / "slide.tif"
     tifffile.imwrite(

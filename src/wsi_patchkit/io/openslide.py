@@ -10,7 +10,7 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-from ..types import LevelInfo, SlideMetadata, as_mpp
+from ..types import LevelInfo, PixelFormat, SlideMetadata, as_mpp
 
 
 class OpenSlideReader:
@@ -81,7 +81,15 @@ class OpenSlideReader:
                     base_mpp[1] * downsample[1],
                 )
             )
-            levels.append(LevelInfo(level, (width, height), downsample, level_mpp))
+            levels.append(
+                LevelInfo(
+                    level,
+                    (width, height),
+                    downsample,
+                    level_mpp,
+                    PixelFormat("uint8", 3, color_model="rgb", photometric="rgb"),
+                )
+            )
         return SlideMetadata(
             resolved,
             tuple(levels),

@@ -10,6 +10,7 @@ import torch
 import torch.distributed as dist
 from torch.utils.data import IterableDataset, get_worker_info
 
+from ..geometry import Interpolation
 from ..io.base import SlideReader
 from ..sampling.base import PatchSampler
 from ..sampling.tissue import TissueFilter
@@ -34,6 +35,7 @@ class WSIPatchIterableDataset(IterableDataset[Mapping[str, Any]]):
         reader_factory: Callable[[], SlideReader],
         tissue_filter: TissueFilter | None = None,
         transform: Callable[[Patch], Mapping[str, Any]] | None = None,
+        interpolation: Interpolation = "bilinear",
         epoch: int = 0,
         even_shards: Literal["pad", "drop", "none"] = "pad",
         start_index: int = 0,
@@ -45,6 +47,10 @@ class WSIPatchIterableDataset(IterableDataset[Mapping[str, Any]]):
             raise ValueError("epoch must be non-negative")
         if start_index < 0:
             raise ValueError("start_index must be non-negative")
+        if interpolation not in ("nearest", "bilinear", "area"):
+            raise ValueError(
+                "interpolation must be 'nearest', 'bilinear', or 'area'"
+            )
         if even_shards not in ("pad", "drop", "none"):
             raise ValueError("even_shards must be 'pad', 'drop', or 'none'")
         if tissue_filter is not None and even_shards != "none":
@@ -57,6 +63,7 @@ class WSIPatchIterableDataset(IterableDataset[Mapping[str, Any]]):
         self.reader_factory = reader_factory
         self.tissue_filter = tissue_filter
         self.transform = transform
+        self.interpolation = interpolation
         self.even_shards = even_shards
         # A shared tensor keeps set_epoch visible to persistent DataLoader
         # workers under both fork and spawn multiprocessing start methods.
@@ -160,7 +167,11 @@ class WSIPatchIterableDataset(IterableDataset[Mapping[str, Any]]):
             requests = self.tissue_filter.filter(requests)
         reader = self.reader_factory()
         try:
-            for patch in PatchStream(reader, requests):
+            for patch in PatchStream(
+                reader,
+                requests,
+                interpolation=self.interpolation,
+            ):
                 yield (
                     self.transform(patch)
                     if self.transform is not None

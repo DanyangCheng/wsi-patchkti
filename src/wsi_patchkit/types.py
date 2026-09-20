@@ -13,6 +13,30 @@ MPP = tuple[float, float]
 Size = tuple[int, int]
 
 
+@dataclass(frozen=True, slots=True)
+class PixelFormat:
+    """Pixel layout returned by a reader for one pyramid level.
+
+    The values describe the array produced by :meth:`SlideReader.read_region`,
+    rather than an arbitrary vendor-private on-disk representation.
+    """
+
+    dtype: str
+    channels: int
+    color_model: Literal["gray", "rgb", "rgba", "palette", "unknown"] = "unknown"
+    photometric: str | None = None
+
+    def __post_init__(self) -> None:
+        dtype = str(self.dtype)
+        if not dtype:
+            raise ValueError("pixel dtype must be non-empty")
+        if self.channels < 1:
+            raise ValueError("pixel channels must be positive")
+        if self.color_model not in ("gray", "rgb", "rgba", "palette", "unknown"):
+            raise ValueError("pixel color_model is unsupported")
+        object.__setattr__(self, "dtype", dtype)
+
+
 def as_mpp(value: float | Sequence[float], *, name: str = "mpp") -> MPP:
     """Validate a scalar or X/Y pair and return an MPP pair."""
     if isinstance(value, (int, float)):
@@ -47,6 +71,7 @@ class LevelInfo:
     dimensions: Size
     downsample: tuple[float, float]
     mpp: MPP | None = None
+    pixel_format: PixelFormat | None = None
 
     def __post_init__(self) -> None:
         if self.level < 0:
@@ -62,6 +87,10 @@ class LevelInfo:
         object.__setattr__(self, "downsample", downsample)
         if self.mpp is not None:
             object.__setattr__(self, "mpp", as_mpp(self.mpp))
+        if self.pixel_format is not None and not isinstance(
+            self.pixel_format, PixelFormat
+        ):
+            raise TypeError("pixel_format must be a PixelFormat or None")
 
 
 @dataclass(frozen=True, slots=True)

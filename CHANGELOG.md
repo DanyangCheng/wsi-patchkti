@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Added deterministic, fixed-length tissue-aware random sampling for distributed
+  training and lazy random-access request sources for indexed sampling.
+- Added `PatchReadResult` and geometric valid masks for aligned patch reads.
+- Added optional finer-only pyramid-level selection for training workloads.
+- Added per-level reader pixel-format metadata and downstream adapter guidance.
+- Fixed aligned reads at non-integral pyramid ratios and added area-averaged RGB
+  downsampling.
+- Added sampling and patch-I/O benchmark tooling.
+
 ## 0.1.0 - 2026-09-15
 
 - Added TIFF and optional OpenSlide WSI readers.

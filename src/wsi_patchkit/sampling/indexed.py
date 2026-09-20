@@ -8,26 +8,26 @@ from dataclasses import dataclass
 import numpy as np
 
 from ..types import PatchRequest, SamplingContext, SlideSpec
+from .base import PatchRequestSource
 
 
 @dataclass(frozen=True, slots=True)
 class IndexedSampler:
     """Enumerate or randomly draw from a precomputed request index."""
 
-    requests: Sequence[PatchRequest]
+    requests: PatchRequestSource
     num_samples: int | None = None
     weights: Sequence[float] | None = None
     seed: int = 0
 
     def __post_init__(self) -> None:
-        requests = tuple(self.requests)
-        if not requests:
+        requests = self.requests
+        if len(requests) < 1:
             raise ValueError("requests must not be empty")
         if self.num_samples is not None and self.num_samples < 1:
             raise ValueError("num_samples must be positive")
         if self.seed < 0:
             raise ValueError("seed must be non-negative")
-        object.__setattr__(self, "requests", requests)
         if self.weights is not None:
             weights = tuple(float(item) for item in self.weights)
             if len(weights) != len(requests):

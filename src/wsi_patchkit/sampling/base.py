@@ -3,9 +3,24 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from ..types import PatchRequest, SamplingContext, SlideSpec
+
+
+@runtime_checkable
+class PatchRequestSource(Protocol):
+    """A lazily addressable source of precomputed patch requests.
+
+    Storage and serialization are application concerns; sources may wrap an
+    in-memory sequence, memory-mapped array, or database-backed index.
+    """
+
+    def __len__(self) -> int:
+        """Return the number of requests."""
+
+    def __getitem__(self, index: int) -> PatchRequest:
+        """Return one request by zero-based position."""
 
 
 class PatchSampler(Protocol):

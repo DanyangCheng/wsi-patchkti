@@ -13,6 +13,9 @@ from PIL import Image
 from .io.base import SlideReader
 from .types import LevelInfo, PatchRequest, SlideMetadata
 
+LevelSelectionPolicy = Literal["nearest", "finer"]
+Interpolation = Literal["nearest", "bilinear", "area"]
+
 
 @dataclass(frozen=True, slots=True)
 class ReadPlan:
@@ -25,11 +28,51 @@ class ReadPlan:
     output_size: tuple[int, int]
 
 
-def choose_level(metadata: SlideMetadata, target_mpp: tuple[float, float]) -> LevelInfo:
-    """Choose the pyramid level nearest to the target physical resolution."""
+@dataclass(frozen=True, slots=True)
+class PatchReadResult:
+    """A materialized patch together with its geometric coverage information.
+
+    ``valid_mask`` is true only where output pixels originate from the source
+    WSI. It deliberately has no tissue, ROI, or annotation semantics.
+    """
+
+    image: NDArray[np.generic]
+    valid_mask: NDArray[np.bool_]
+    plan: ReadPlan | None
+
+
+def choose_level(
+    metadata: SlideMetadata,
+    target_mpp: tuple[float, float],
+    *,
+    policy: LevelSelectionPolicy = "nearest",
+) -> LevelInfo:
+    """Choose a pyramid level for a requested physical resolution.
+
+    ``nearest`` preserves the original behaviour. ``finer`` chooses the
+    coarsest level that is no coarser than the requested MPP, avoiding an
+    unnecessary loss of detail caused by upsampling a coarser level.
+    """
     candidates = [level for level in metadata.levels if level.mpp is not None]
     if not candidates:
         raise ValueError("slide has no physical-resolution metadata")
+    if policy not in ("nearest", "finer"):
+        raise ValueError("policy must be 'nearest' or 'finer'")
+    if policy == "finer":
+        eligible = [
+            level
+            for level in candidates
+            if level.mpp[0] <= target_mpp[0] and level.mpp[1] <= target_mpp[1]
+        ]
+        if eligible:
+            return max(
+                eligible,
+                key=lambda level: level.mpp[0] * level.mpp[1],  # type: ignore[index]
+            )
+        return min(
+            candidates,
+            key=lambda level: level.mpp[0] * level.mpp[1],  # type: ignore[index]
+        )
     return min(
         candidates,
         key=lambda level: sum(
@@ -58,12 +101,13 @@ def plan_aligned_read(
     request: PatchRequest,
     *,
     level: int | None = None,
+    level_policy: LevelSelectionPolicy = "nearest",
 ) -> ReadPlan | None:
     """Plan an MPP-aligned, clipped read for one request."""
     if metadata.mpp is None:
         raise ValueError("slide has no MPP metadata; set PatchRequest.source_mpp")
     selected = (
-        choose_level(metadata, request.target_mpp)
+        choose_level(metadata, request.target_mpp, policy=level_policy)
         if level is None
         else metadata.levels[level]
     )
@@ -89,9 +133,15 @@ def plan_aligned_read(
     )
     if lx1 <= lx0 or ly1 <= ly0:
         return None
+    # ``read_region`` locations use level-0 pixels, while ``lx0``/``ly0`` are
+    # exact coordinates on the selected level.  Rounding down here can make a
+    # reader's floor(location / downsample) select the preceding level pixel
+    # for non-integral pyramid ratios (for example 1000 / 333).  Ceil preserves
+    # the selected-level coordinate.  nextafter keeps mathematically integral
+    # products stable in the presence of a one-ULP floating-point overshoot.
     level_zero_location = (
-        round(lx0 * selected.downsample[0]),
-        round(ly0 * selected.downsample[1]),
+        math.ceil(math.nextafter(lx0 * selected.downsample[0], -math.inf)),
+        math.ceil(math.nextafter(ly0 * selected.downsample[1], -math.inf)),
     )
     destination = (
         x0 - request.x,
@@ -149,31 +199,48 @@ def _resize_nearest(
 def _resize_rgb(
     array: NDArray[np.uint8],
     size: tuple[int, int],
-    interpolation: Literal["nearest", "bilinear"],
+    interpolation: Interpolation,
 ) -> NDArray[np.uint8]:
+    if interpolation not in ("nearest", "bilinear", "area"):
+        raise ValueError("interpolation must be 'nearest', 'bilinear', or 'area'")
     if (array.shape[1], array.shape[0]) == size:
         return array
     if interpolation == "nearest":
         return np.asarray(_resize_nearest(array, size), dtype=np.uint8)
+    if interpolation == "area" and (
+        size[0] > array.shape[1] or size[1] > array.shape[0]
+    ):
+        raise ValueError("area interpolation only supports downsampling")
     image = Image.fromarray(array, mode="RGB")
-    return np.asarray(image.resize(size, resample=Image.Resampling.BILINEAR))
+    resample = (
+        Image.Resampling.BOX
+        if interpolation == "area"
+        else Image.Resampling.BILINEAR
+    )
+    return np.asarray(image.resize(size, resample=resample))
 
 
-def read_aligned_patch(
+def read_aligned_patch_result(
     reader: SlideReader,
     request: PatchRequest,
     *,
     metadata: SlideMetadata | None = None,
     level: int | None = None,
-    interpolation: Literal["nearest", "bilinear"] = "bilinear",
+    level_policy: LevelSelectionPolicy = "nearest",
+    interpolation: Interpolation = "bilinear",
     color_mode: Literal["rgb", "native"] = "rgb",
-) -> NDArray[np.generic]:
-    """Materialize a target-MPP request as a padded HWC array."""
+) -> PatchReadResult:
+    """Materialize a request and report which output pixels came from the WSI."""
     metadata = metadata or reader.metadata(
         request.slide,
         source_mpp=request.source_mpp,
     )
-    plan = plan_aligned_read(metadata, request, level=level)
+    plan = plan_aligned_read(
+        metadata,
+        request,
+        level=level,
+        level_policy=level_policy,
+    )
     if color_mode == "rgb":
         result: NDArray[np.generic] = np.full(
             (request.height, request.width, 3),
@@ -186,8 +253,9 @@ def read_aligned_patch(
             request.fill_value,
             dtype=np.uint8,
         )
+    valid_mask = np.zeros((request.height, request.width), dtype=bool)
     if plan is None:
-        return result
+        return PatchReadResult(result, valid_mask, None)
 
     region = reader.read_region(
         request.slide,
@@ -214,4 +282,30 @@ def read_aligned_patch(
                 dtype=resized.dtype,
             )
     result[dy0:dy1, dx0:dx1] = resized
-    return result
+    valid_mask[dy0:dy1, dx0:dx1] = True
+    return PatchReadResult(result, valid_mask, plan)
+
+
+def read_aligned_patch(
+    reader: SlideReader,
+    request: PatchRequest,
+    *,
+    metadata: SlideMetadata | None = None,
+    level: int | None = None,
+    level_policy: LevelSelectionPolicy = "nearest",
+    interpolation: Interpolation = "bilinear",
+    color_mode: Literal["rgb", "native"] = "rgb",
+) -> NDArray[np.generic]:
+    """Materialize a target-MPP request as a padded HWC array.
+
+    Use :func:`read_aligned_patch_result` when geometric coverage is required.
+    """
+    return read_aligned_patch_result(
+        reader,
+        request,
+        metadata=metadata,
+        level=level,
+        level_policy=level_policy,
+        interpolation=interpolation,
+        color_mode=color_mode,
+    ).image

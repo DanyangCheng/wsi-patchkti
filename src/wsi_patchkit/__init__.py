@@ -3,20 +3,26 @@
 from importlib.metadata import PackageNotFoundError, version
 
 from .geometry import (
+    Interpolation,
+    LevelSelectionPolicy,
+    PatchReadResult,
     ReadPlan,
     choose_level,
     plan_aligned_read,
     read_aligned_patch,
+    read_aligned_patch_result,
     virtual_canvas_size,
 )
 from .io import AutoSlideReader, OpenSlideReader, SlideReader, TiffReader
 from .sampling import (
     GridSampler,
     IndexedSampler,
+    PatchRequestSource,
     PatchSampler,
     RandomSampler,
     TissueFilter,
     TissueMask,
+    TissueRandomSampler,
     axis_positions,
 )
 from .stream import PatchStream
@@ -32,6 +38,7 @@ from .types import (
     LevelInfo,
     Patch,
     PatchRequest,
+    PixelFormat,
     SamplingContext,
     Size,
     SlideMetadata,
@@ -52,12 +59,17 @@ __all__ = [
     "EncodedImage",
     "GridSampler",
     "IndexedSampler",
+    "Interpolation",
+    "LevelSelectionPolicy",
     "LevelInfo",
     "OpenSlideReader",
     "Patch",
+    "PatchReadResult",
     "PatchRequest",
+    "PatchRequestSource",
     "PatchSampler",
     "PatchStream",
+    "PixelFormat",
     "RandomSampler",
     "ReadPlan",
     "SamplingContext",
@@ -69,6 +81,7 @@ __all__ = [
     "TileRenderer",
     "TissueFilter",
     "TissueMask",
+    "TissueRandomSampler",
     "as_mpp",
     "as_size",
     "axis_positions",
@@ -77,5 +90,6 @@ __all__ = [
     "iiif_scale_factors",
     "plan_aligned_read",
     "read_aligned_patch",
+    "read_aligned_patch_result",
     "virtual_canvas_size",
 ]

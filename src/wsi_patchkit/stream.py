@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator
 from typing import Literal
 
-from .geometry import read_aligned_patch
+from .geometry import Interpolation, read_aligned_patch
 from .io.base import SlideReader
 from .types import Patch, PatchRequest, SlideMetadata
 
@@ -18,9 +18,13 @@ class PatchStream(Iterable[Patch]):
         reader: SlideReader,
         requests: Iterable[PatchRequest],
         *,
-        interpolation: Literal["nearest", "bilinear"] = "bilinear",
+        interpolation: Interpolation = "bilinear",
         color_mode: Literal["rgb", "native"] = "rgb",
     ) -> None:
+        if interpolation not in ("nearest", "bilinear", "area"):
+            raise ValueError(
+                "interpolation must be 'nearest', 'bilinear', or 'area'"
+            )
         self.reader = reader
         self.requests = requests
         self.interpolation = interpolation

@@ -12,6 +12,7 @@ from wsi_patchkit import (
     SlideSpec,
     TissueFilter,
     TissueMask,
+    TissueRandomSampler,
     axis_positions,
 )
 
@@ -189,3 +190,73 @@ def test_tissue_filter_maps_a_low_resolution_mask_to_the_canvas() -> None:
     )
 
     assert [(item.x, item.y) for item in selected] == [(0, 0), (0, 4)]
+
+
+def test_tissue_random_sampler_is_deterministic_and_keeps_equal_shards() -> None:
+    slide = _slide()
+    mask = TissueMask(np.ones((2, 2), dtype=np.uint8), canvas_size=slide.canvas_size)
+    sampler = TissueRandomSampler(
+        {slide.path: mask},
+        num_samples=5,
+        patch_size=3,
+        minimum_fraction=1.0,
+        seed=8,
+    )
+
+    full = list(sampler.sample([slide]))
+    shards = [
+        list(
+            sampler.sample(
+                [slide],
+                context=SamplingContext(
+                    worker_id=worker,
+                    num_workers=2,
+                    shard_policy="pad",
+                ),
+            )
+        )
+        for worker in range(2)
+    ]
+
+    assert full == list(sampler.sample([slide]))
+    assert [len(shard) for shard in shards] == [3, 3]
+    assert shards[0] == full[::2]
+    assert shards[1][:2] == full[1::2]
+    assert shards[1][2] == full[0]
+
+
+def test_tissue_random_sampler_fails_when_no_valid_request_exists() -> None:
+    slide = _slide()
+    sampler = TissueRandomSampler(
+        {slide.path: TissueMask(np.zeros((1, 1)), canvas_size=slide.canvas_size)},
+        num_samples=1,
+        patch_size=3,
+        minimum_fraction=0.1,
+        max_attempts=2,
+    )
+
+    with pytest.raises(RuntimeError, match="unable to draw"):
+        list(sampler.sample([slide]))
+
+
+def test_indexed_sampler_keeps_a_lazy_request_source() -> None:
+    requests = tuple(PatchRequest("slide.tif", x, 0, 2, 2, 0.5) for x in range(3))
+
+    class Source:
+        def __init__(self) -> None:
+            self.get_calls = 0
+
+        def __len__(self) -> int:
+            return len(requests)
+
+        def __getitem__(self, index: int) -> PatchRequest:
+            self.get_calls += 1
+            return requests[index]
+
+    source = Source()
+    sampler = IndexedSampler(source)
+
+    assert sampler.requests is source
+    assert source.get_calls == 0
+    assert [request.x for request in sampler.sample()] == [0, 1, 2]
+    assert source.get_calls == 3

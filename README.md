@@ -114,7 +114,25 @@ Sampler coordinates live on a virtual canvas at `target_mpp`. For example, an
 `x` coordinate of 100 at 0.5 MPP means 50 micrometres from the level-0 origin.
 Reader-level `read_region()` calls use OpenSlide-compatible semantics: the
 location is in level-0 pixels and the requested size is in pixels of the chosen
-pyramid level. `read_aligned_patch()` performs the conversion explicitly.
+pyramid level. `read_aligned_patch()` performs the conversion explicitly. All
+rectangles use half-open `(x0, y0, x1, y1)` coverage semantics.
+
+`read_aligned_patch()` keeps the original array-only API. Use
+`read_aligned_patch_result()` when a downstream application also needs the
+geometric coverage mask created by boundary padding:
+
+```python
+result = read_aligned_patch_result(reader, request, level_policy="finer")
+image = result.image
+geometry_valid = result.valid_mask
+```
+
+`geometry_valid` reports only pixels backed by the WSI. It has no tissue, ROI,
+or annotation meaning. `level_policy="nearest"` remains the default;
+`"finer"` avoids selecting a native level coarser than the target MPP when a
+finer level is available. Pass `interpolation="area"` when reducing an RGB
+region with area averaging; label and indexed-mask reads should continue to use
+`interpolation="nearest"` with `color_mode="native"`.
 
 ## Sliding-window inference
 
@@ -175,11 +193,44 @@ The tissue mask may be low resolution; it is mapped over the corresponding
 target-MPP canvas. Version 0.1 consumes caller-provided masks and does not impose
 a tissue-detection algorithm.
 
+For distributed training, use `TissueRandomSampler` instead of filtering an
+already-sharded request stream. It retries deterministically until every global
+sample meets the threshold, so `pad` and `drop` shard policies retain equal
+lengths:
+
+```python
+from wsi_patchkit import TissueRandomSampler
+
+sampler = TissueRandomSampler(
+    masks,
+    num_samples=20_000,
+    patch_size=512,
+    minimum_fraction=0.05,
+    max_attempts=100,
+    seed=2026,
+)
+```
+
 ## Indexed sampling
 
 `IndexedSampler` samples precomputed `PatchRequest` objects. Index serialization
 is deliberately left to the caller in v0.1 so projects can use NPZ, Parquet, or
-a database without coupling the core library to one storage format.
+a database without coupling the core library to one storage format. Its input
+only needs `__len__()` and integer `__getitem__()`, allowing lazy wrappers over
+memory-mapped arrays and database-backed coordinate indexes.
+
+## Downstream reader adapters
+
+Applications may adapt `SlideReader` to their own dataset backend without
+depending on patchkit task types. `metadata()` supplies level dimensions, MPP,
+and optional `LevelInfo.pixel_format`; `read_region()` always accepts a level-0
+location and a size in the selected level's pixels. A typical adapter exposes
+those methods through the application's own `info/read_region/close` protocol.
+
+Coordinate indexes remain application-owned. An adapter converts each index row
+from its declared coordinate space into a `PatchRequest`, then uses
+`read_aligned_patch()` or `read_aligned_patch_result()`. Labels, masks, split
+membership, and target encoding stay in the downstream application.
 
 ## PyTorch adapter
 

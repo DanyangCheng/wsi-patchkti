@@ -12,7 +12,7 @@ import numpy as np
 import tifffile
 from numpy.typing import NDArray
 
-from ..types import LevelInfo, SlideMetadata, as_mpp
+from ..types import LevelInfo, PixelFormat, SlideMetadata, as_mpp
 
 
 def _tag_number(tag: Any) -> float:
@@ -32,6 +32,35 @@ def _page_mpp(page: tifffile.TiffPage) -> tuple[float, float] | None:
     if factor is None:
         return None
     return as_mpp((factor / _tag_number(x_tag), factor / _tag_number(y_tag)))
+
+
+def _page_pixel_format(page: tifffile.TiffPage) -> PixelFormat:
+    photometric_value = int(page.photometric)
+    photometric = {
+        0: "miniswhite",
+        1: "minisblack",
+        2: "rgb",
+        3: "palette",
+        6: "ycbcr",
+    }.get(photometric_value, str(page.photometric).lower())
+    channels = int(page.samplesperpixel or 1)
+    color_model = (
+        "gray"
+        if photometric_value in (0, 1)
+        else "palette"
+        if photometric_value == 3
+        else "rgba"
+        if photometric_value == 2 and channels == 4
+        else "rgb"
+        if photometric_value == 2
+        else "unknown"
+    )
+    return PixelFormat(
+        str(np.dtype(page.dtype)),
+        channels,
+        color_model=color_model,
+        photometric=photometric,
+    )
 
 
 class _TiffLevelReader:
@@ -168,11 +197,14 @@ class TiffReader:
             dimensions = [
                 (int(page.imagewidth), int(page.imagelength)) for page in pages
             ]
+            pixel_formats = [_page_pixel_format(page) for page in pages]
             base_mpp = override if override is not None else _page_mpp(pages[0])
             description = pages[0].description or ""
         width0, height0 = dimensions[0]
         levels: list[LevelInfo] = []
-        for level, (width, height) in enumerate(dimensions):
+        for level, ((width, height), pixel_format) in enumerate(
+            zip(dimensions, pixel_formats, strict=True)
+        ):
             downsample = width0 / width, height0 / height
             level_mpp = (
                 None
@@ -182,7 +214,15 @@ class TiffReader:
                     base_mpp[1] * downsample[1],
                 )
             )
-            levels.append(LevelInfo(level, (width, height), downsample, level_mpp))
+            levels.append(
+                LevelInfo(
+                    level,
+                    (width, height),
+                    downsample,
+                    level_mpp,
+                    pixel_format,
+                )
+            )
         metadata = SlideMetadata(
             resolved,
             tuple(levels),
