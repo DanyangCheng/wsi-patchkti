@@ -9,7 +9,7 @@
       src="https://cdn.jsdelivr.net/npm/openseadragon@5.0.1/build/openseadragon/openseadragon.min.js"
       defer
     ></script>
-    <script src="/static/app.js?v=5" defer></script>
+    <script src="/static/app.js?v=6" defer></script>
   </head>
   <body>
     <header class="toolbar">
@@ -80,10 +80,10 @@
       </div>
       <section id="crop-panel" class="crop-panel" aria-label="矩形裁剪" hidden>
         <div class="crop-panel-title">
-          <strong>Level-0 矩形裁剪</strong>
+          <strong>原生 Level 矩形裁剪</strong>
           <button id="crop-close" type="button" aria-label="关闭裁剪">×</button>
         </div>
-        <p class="crop-hint">点击图像放置裁剪框，拖动裁剪框可调整位置。</p>
+        <p class="crop-hint">坐标和宽高均为所选 Level 的像素；文件以该 Level 的原生分辨率保存。</p>
         <div class="crop-fields crop-coordinates">
           <label>x <input id="crop-x" type="number" min="0" step="1" /></label>
           <label>y <input id="crop-y" type="number" min="0" step="1" /></label>
@@ -93,6 +93,10 @@
           <label>高 <input id="crop-height" type="number" min="1" step="1" /></label>
         </div>
         <div class="crop-fields">
+          <label>
+            Level
+            <select id="crop-level" aria-label="裁剪 Level"></select>
+          </label>
           <label>
             格式
             <select id="crop-format">

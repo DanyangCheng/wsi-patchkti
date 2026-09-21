@@ -77,8 +77,10 @@ and an MPP-aware scale bar. TIFF files use the bundled tifffile reader; other
 formats are routed to the optional OpenSlide reader.
 
 Select **矩形裁剪** to place a rectangle on the slide, enter its exact level-0
-`x`, `y`, width, and height, and save a PNG or JPEG on the server. Crops are
-read directly from pyramid level 0 without rescaling. The server stores them in
+`x`, `y`, width, and height, choose a pyramid level, and save a PNG or JPEG on
+the server. Coordinates and dimensions are pixels at the selected level; crops
+are read directly from that level without rescaling, at its native resolution.
+The server stores them in
 `--crop-output-dir` (the default is `./crops`) and never overwrites an existing
 file. The viewer remembers the most recently entered crop width and height when
 switching slides or reloading the page. Saving submits work to a background

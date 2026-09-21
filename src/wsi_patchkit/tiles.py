@@ -328,6 +328,57 @@ class TileRenderer:
             raise ValueError("reader returned an unexpected level-0 crop size")
         return self._encode_image(image, image_format)
 
+    def render_level_region(
+        self,
+        path: str | Path,
+        region: tuple[int, int, int, int],
+        level: int,
+        *,
+        image_format: ImageFormat = "png",
+        source_mpp: float | Sequence[float] | None = None,
+    ) -> EncodedImage:
+        """Read an in-bounds region directly at one native pyramid level.
+
+        ``region`` is expressed in pixels of ``level``. The returned image is
+        read without resampling, so its dimensions exactly equal ``region``'s
+        requested width and height.
+        """
+        x, y, width, height = map(int, region)
+        if x < 0 or y < 0 or width < 1 or height < 1:
+            raise ValueError("region must contain non-negative coordinates and size")
+        if isinstance(level, bool) or not isinstance(level, int):
+            raise ValueError("level must be an integer")
+        if image_format not in ("jpg", "png"):
+            raise ValueError("image_format must be 'jpg' or 'png'")
+
+        source_mpp_pair: MPP | None = (
+            None if source_mpp is None else as_mpp(source_mpp, name="source_mpp")
+        )
+        metadata = self.metadata(path, source_mpp=source_mpp_pair)
+        if level < 0 or level >= len(metadata.levels):
+            raise ValueError("level does not exist for this slide")
+        level_info = metadata.levels[level]
+        full_width, full_height = level_info.dimensions
+        if x + width > full_width or y + height > full_height:
+            raise ValueError("region must be fully inside the selected level")
+        if width * height > self.max_output_pixels:
+            raise ValueError("requested output exceeds max_output_pixels")
+        level_zero_location = (
+            round(x * level_info.downsample[0]),
+            round(y * level_info.downsample[1]),
+        )
+        with self._readers.acquire() as reader:
+            array = reader.read_region(
+                path,
+                level_zero_location,
+                level_info.level,
+                (width, height),
+            )
+        image = Image.fromarray(_as_rgb(array), "RGB")
+        if image.size != (width, height):
+            raise ValueError("reader returned an unexpected level crop size")
+        return self._encode_image(image, image_format)
+
     def _render_uncached(
         self,
         path: str | Path,

@@ -13,7 +13,7 @@ from PIL import Image
 pytest.importorskip("fastapi")
 httpx = pytest.importorskip("httpx2")
 
-from wsi_patchkit import TiffReader  # noqa: E402
+from wsi_patchkit import LevelInfo, SlideMetadata, TiffReader  # noqa: E402
 from wsi_patchkit.web import SlideRegistry, TileWorkerPool, create_app  # noqa: E402
 from wsi_patchkit.web.__main__ import discover_slides  # noqa: E402
 
@@ -140,13 +140,14 @@ async def test_viewer_serves_metadata_tiles_and_frontend(tmp_path: Path) -> None
     assert cached.status_code == 304
     assert index.status_code == 200
     assert "WSI PatchKit Viewer" in index.text
-    assert "/static/app.js?v=5" in index.text
+    assert "/static/app.js?v=6" in index.text
     assert script.status_code == 200
     assert "dragToPan" in script.text
     assert "populateSlideMenu" in script.text
     assert "saveCrop" in script.text
     assert "pollCropJob" in script.text
     assert "wsi-patchkit.crop-size" in script.text
+    assert "crop-level" in script.text
 
 
 @pytest.mark.anyio
@@ -197,6 +198,65 @@ async def test_level0_crop_is_saved_on_server(tmp_path: Path) -> None:
         np.asarray(Image.open(destination)),
         expected[4:9, 3:9],
     )
+
+
+@pytest.mark.anyio
+async def test_crop_uses_selected_native_level_resolution(tmp_path: Path) -> None:
+    path = tmp_path / "slide.tif"
+    output_dir = tmp_path / "saved-crops"
+    _write_slide(path)
+    level0 = np.arange(16 * 20 * 3, dtype=np.uint8).reshape(16, 20, 3)
+
+    class PyramidReader:
+        def metadata(self, value, *, source_mpp=None):
+            return SlideMetadata(
+                value,
+                (
+                    LevelInfo(0, (20, 16), (1, 1)),
+                    LevelInfo(1, (10, 8), (2, 2)),
+                ),
+            )
+
+        def read_region(self, value, location, level, size):
+            image = level0 if level == 0 else level0[::2, ::2]
+            downsample = 1 if level == 0 else 2
+            x, y = location[0] // downsample, location[1] // downsample
+            width, height = size
+            return image[y : y + height, x : x + width]
+
+        def close(self) -> None:
+            pass
+
+    app = create_app(
+        {"case-001": path},
+        reader=PyramidReader(),
+        crop_output_dir=output_dir,
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with app.router.lifespan_context(app), httpx.AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            "/api/slides/case-001/crops",
+            json={
+                "x": 1,
+                "y": 2,
+                "width": 4,
+                "height": 3,
+                "level": 1,
+                "filename": "level-1.png",
+            },
+        )
+        assert response.status_code == 202
+        submitted = response.json()
+        completed = await _wait_for_crop(client, "case-001", submitted["job_id"])
+
+    assert submitted["level"] == 1
+    assert completed["status"] == "completed"
+    image = np.asarray(Image.open(output_dir / "level-1.png"))
+    assert image.shape == (3, 4, 3)
+    np.testing.assert_array_equal(image, level0[::2, ::2][2:5, 1:5])
 
 
 @pytest.mark.anyio

@@ -24,6 +24,7 @@
   const cropY = document.querySelector("#crop-y");
   const cropWidth = document.querySelector("#crop-width");
   const cropHeight = document.querySelector("#crop-height");
+  const cropLevel = document.querySelector("#crop-level");
   const cropFormat = document.querySelector("#crop-format");
   const cropFilename = document.querySelector("#crop-filename");
   const cropSave = document.querySelector("#crop-save");
@@ -188,16 +189,18 @@
   function updateCropOverlay() {
     const item = currentItem();
     if (!item || !cropActive) return;
+    const level = selectedCropLevel();
+    if (!level) return;
     const imageRect = new OpenSeadragon.Rect(
-      cropRegion.x,
-      cropRegion.y,
-      cropRegion.width,
-      cropRegion.height,
+      cropRegion.x * level.downsample[0],
+      cropRegion.y * level.downsample[1],
+      cropRegion.width * level.downsample[0],
+      cropRegion.height * level.downsample[1],
     );
     const viewportRect = item.imageToViewportRectangle(imageRect);
     cropOverlay.hidden = false;
     cropOverlaySize.textContent =
-      `${cropRegion.width.toLocaleString()} × ${cropRegion.height.toLocaleString()} px`;
+      `Level ${cropLevel.value || 0}: ${cropRegion.width.toLocaleString()} × ${cropRegion.height.toLocaleString()} px`;
     if (cropOverlayAdded) {
       viewer.updateOverlay(cropOverlay, viewportRect);
     } else {
@@ -206,13 +209,37 @@
     }
   }
 
-  function setCropRegion(region, updateInputs = true) {
+  function selectedCropLevel() {
+    return currentSlide?.levels?.find(
+      (level) => level.level === Number(cropLevel.value),
+    );
+  }
+
+  function populateCropLevels() {
     if (!currentSlide) return;
-    const width = Math.max(1, Math.min(Math.round(region.width), currentSlide.width));
-    const height = Math.max(1, Math.min(Math.round(region.height), currentSlide.height));
+    const previous = cropLevel.value;
+    const levels = currentSlide.levels || [];
+    cropLevel.replaceChildren(
+      ...levels.map((level) => {
+        const option = document.createElement("option");
+        option.value = String(level.level);
+        option.textContent = `Level ${level.level} (${level.width} × ${level.height})`;
+        return option;
+      }),
+    );
+    cropLevel.value = levels.some((level) => String(level.level) === previous)
+      ? previous
+      : "0";
+  }
+
+  function setCropRegion(region, updateInputs = true) {
+    const level = selectedCropLevel();
+    if (!level) return;
+    const width = Math.max(1, Math.min(Math.round(region.width), level.width));
+    const height = Math.max(1, Math.min(Math.round(region.height), level.height));
     cropRegion = {
-      x: Math.max(0, Math.min(Math.round(region.x), currentSlide.width - width)),
-      y: Math.max(0, Math.min(Math.round(region.y), currentSlide.height - height)),
+      x: Math.max(0, Math.min(Math.round(region.x), level.width - width)),
+      y: Math.max(0, Math.min(Math.round(region.y), level.height - height)),
       width,
       height,
     };
@@ -221,31 +248,34 @@
       cropY.value = String(cropRegion.y);
       cropWidth.value = String(cropRegion.width);
       cropHeight.value = String(cropRegion.height);
-      cropX.max = String(currentSlide.width - cropRegion.width);
-      cropY.max = String(currentSlide.height - cropRegion.height);
-      cropWidth.max = String(currentSlide.width);
-      cropHeight.max = String(currentSlide.height);
+      cropX.max = String(level.width - cropRegion.width);
+      cropY.max = String(level.height - cropRegion.height);
+      cropWidth.max = String(level.width);
+      cropHeight.max = String(level.height);
     }
     updateCropOverlay();
   }
 
   function centerCropAt(imagePoint) {
+    const level = selectedCropLevel();
+    if (!level) return;
     setCropRegion({
       ...cropRegion,
-      x: imagePoint.x - cropRegion.width / 2,
-      y: imagePoint.y - cropRegion.height / 2,
+      x: imagePoint.x / level.downsample[0] - cropRegion.width / 2,
+      y: imagePoint.y / level.downsample[1] - cropRegion.height / 2,
     });
   }
 
   function initializeCropRegion() {
     const item = currentItem();
-    if (!item || !currentSlide) return;
+    const level = selectedCropLevel();
+    if (!item || !level) return;
     const center = item.viewportToImageCoordinates(viewer.viewport.getCenter(true));
-    const width = Math.min(preferredCropSize.width, currentSlide.width);
-    const height = Math.min(preferredCropSize.height, currentSlide.height);
+    const width = Math.min(preferredCropSize.width, level.width);
+    const height = Math.min(preferredCropSize.height, level.height);
     setCropRegion({
-      x: center.x - width / 2,
-      y: center.y - height / 2,
+      x: center.x / level.downsample[0] - width / 2,
+      y: center.y / level.downsample[1] - height / 2,
       width,
       height,
     });
@@ -286,7 +316,7 @@
 
   async function saveCrop() {
     if (!currentSlide || !cropActive) return;
-    setCropStatus("正在提交 level-0 裁剪任务…");
+    setCropStatus(`正在提交 Level ${cropLevel.value || 0} 裁剪任务…`);
     try {
       const slideId = currentSlide.id;
       const response = await fetch(
@@ -296,6 +326,7 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             ...cropRegion,
+            level: Number(cropLevel.value),
             format: cropFormat.value,
             filename: cropFilename.value.trim() || null,
           }),
@@ -343,6 +374,7 @@
       }
       if (sequence !== openSequence) return;
       currentSlide = metadata;
+      populateCropLevels();
       viewer.open(`/iiif/3/${encodeURIComponent(slideId)}/info.json`);
     } catch (error) {
       if (sequence === openSequence) {
@@ -480,10 +512,16 @@
           new OpenSeadragon.Point(0, 0),
         );
         const imageDeltaPoint = item.viewportToImageCoordinates(viewportDelta);
+        const level = selectedCropLevel();
+        if (!level) return;
         setCropRegion({
           ...cropRegion,
-          x: cropRegion.x + imageDeltaPoint.x - imageOrigin.x,
-          y: cropRegion.y + imageDeltaPoint.y - imageOrigin.y,
+          x:
+            cropRegion.x +
+            (imageDeltaPoint.x - imageOrigin.x) / level.downsample[0],
+          y:
+            cropRegion.y +
+            (imageDeltaPoint.y - imageOrigin.y) / level.downsample[1],
         });
         event.preventDefaultAction = true;
       },
@@ -505,6 +543,10 @@
     for (const input of [cropX, cropY, cropWidth, cropHeight]) {
       input.addEventListener("change", syncCropInputs);
     }
+    cropLevel.addEventListener("change", () => {
+      initializeCropRegion();
+      setCropStatus("");
+    });
     cropSave.addEventListener("click", saveCrop);
     slider.addEventListener("input", () => setImageZoom(2 ** Number(slider.value)));
     menuButton.addEventListener("click", () => setSlideMenuOpen(menu.hidden));

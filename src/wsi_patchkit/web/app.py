@@ -99,6 +99,15 @@ def _crop_integer(payload: Mapping[str, object], name: str) -> int:
     return value
 
 
+def _crop_level(payload: Mapping[str, object], metadata: SlideMetadata) -> int:
+    level = payload.get("level", 0)
+    if isinstance(level, bool) or not isinstance(level, int):
+        raise ValueError("level must be an integer")
+    if level < 0 or level >= len(metadata.levels):
+        raise ValueError("level does not exist for this slide")
+    return level
+
+
 def _crop_filename(
     payload: Mapping[str, object],
     *,
@@ -244,14 +253,13 @@ def create_app(
             y = _crop_integer(payload, "y")
             width = _crop_integer(payload, "width")
             height = _crop_integer(payload, "height")
+            level = _crop_level(payload, metadata)
             region = (x, y, width, height)
             if x < 0 or y < 0 or width < 1 or height < 1:
                 raise ValueError("crop coordinates must be non-negative and sized")
-            if (
-                x + width > metadata.dimensions[0]
-                or y + height > metadata.dimensions[1]
-            ):
-                raise ValueError("crop must be fully inside the level-0 image")
+            level_dimensions = metadata.levels[level].dimensions
+            if x + width > level_dimensions[0] or y + height > level_dimensions[1]:
+                raise ValueError("crop must be fully inside the selected level")
             image_format_value = payload.get("format", "png")
             if not isinstance(image_format_value, str):
                 raise ValueError("format must be png or jpg")
@@ -273,6 +281,7 @@ def create_app(
                 slide_id=slide_id,
                 source=source,
                 region=region,
+                level=level,
                 image_format=image_format,  # type: ignore[arg-type]
                 filename=filename,
             )

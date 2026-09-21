@@ -1,4 +1,4 @@
-"""Queued background jobs for server-side level-0 crops."""
+"""Queued background jobs for server-side native-level crops."""
 
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ class _CropJob:
     slide_id: str
     source: SlideSource
     region: tuple[int, int, int, int]
+    level: int
     image_format: ImageFormat
     filename: str
     status: CropJobStatus = "queued"
@@ -36,7 +37,7 @@ class _CropJob:
             "slide_id": self.slide_id,
             "filename": self.filename,
             "format": self.image_format,
-            "level": 0,
+            "level": self.level,
             "region": {"x": x, "y": y, "width": width, "height": height},
         }
         if self.error is not None:
@@ -84,6 +85,7 @@ class CropJobQueue:
         slide_id: str,
         source: SlideSource,
         region: tuple[int, int, int, int],
+        level: int,
         image_format: ImageFormat,
         filename: str,
     ) -> dict[str, object]:
@@ -92,6 +94,7 @@ class CropJobQueue:
             slide_id,
             source,
             region,
+            level,
             image_format,
             filename,
         )
@@ -139,9 +142,10 @@ class CropJobQueue:
                 self._finish(job, "completed")
 
     def _save(self, job: _CropJob) -> None:
-        encoded = self._renderer.render_level0_region(
+        encoded = self._renderer.render_level_region(
             job.source.path,
             job.region,
+            job.level,
             image_format=job.image_format,
             source_mpp=job.source.source_mpp,
         )
