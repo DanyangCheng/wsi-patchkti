@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import re
 import uuid
 from collections.abc import Callable, Mapping
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
+from typing import TypeVar
 
 try:
     from fastapi import FastAPI, HTTPException, Request
@@ -33,6 +35,31 @@ _STATIC_ASSETS = {
 }
 _INDEX_HTML = (_STATIC_DIR / "index.html").read_text(encoding="utf-8")
 _CROP_FILENAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$")
+T = TypeVar("T")
+
+
+async def _run_while_connected(
+    workers: TileWorkerPool,
+    request: Request,
+    function: Callable[..., T],
+    /,
+    *args: object,
+    **kwargs: object,
+) -> T:
+    """Cancel queued blocking work after the HTTP client disconnects."""
+    work = asyncio.create_task(workers.run(function, *args, **kwargs))
+    try:
+        while not work.done():
+            if await request.is_disconnected():
+                work.cancel()
+                with suppress(asyncio.CancelledError):
+                    await work
+                raise asyncio.CancelledError
+            await asyncio.sleep(0.01)
+        return work.result()
+    finally:
+        if not work.done():
+            work.cancel()
 
 
 def _public_metadata(slide_id: str, metadata: SlideMetadata) -> dict[str, object]:
@@ -238,8 +265,10 @@ def create_app(
         return [{"id": slide_id} for slide_id in registry]
 
     @app.get("/api/slides/{slide_id}", name="slide_metadata")
-    async def slide_metadata(slide_id: str) -> dict[str, object]:
-        _, metadata = await workers.run(metadata_for, slide_id)
+    async def slide_metadata(slide_id: str, request: Request) -> dict[str, object]:
+        _, metadata = await _run_while_connected(
+            workers, request, metadata_for, slide_id
+        )
         return _public_metadata(slide_id, metadata)
 
     @app.post("/api/slides/{slide_id}/crops", name="save_crop")
@@ -310,7 +339,9 @@ def create_app(
 
     @app.get("/iiif/3/{slide_id}/info.json", name="iiif_info")
     async def iiif_info(slide_id: str, request: Request) -> JSONResponse:
-        _, metadata = await workers.run(metadata_for, slide_id)
+        _, metadata = await _run_while_connected(
+            workers, request, metadata_for, slide_id
+        )
         width, height = metadata.dimensions
         info_url = str(request.url_for("iiif_info", slide_id=slide_id))
         service_id = info_url.removesuffix("/info.json")
@@ -362,7 +393,9 @@ def create_app(
         normalized_format = "jpg" if image_format == "jpeg" else image_format
         if normalized_format not in ("jpg", "png"):
             raise HTTPException(status_code=400, detail="format must be jpg or png")
-        source, metadata = await workers.run(metadata_for, slide_id)
+        source, metadata = await _run_while_connected(
+            workers, request, metadata_for, slide_id
+        )
         try:
             parsed_region = _parse_region(region, metadata.dimensions)
             output_size = _parse_size(size, parsed_region)
@@ -378,7 +411,9 @@ def create_app(
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         try:
-            encoded = await workers.run(
+            encoded = await _run_while_connected(
+                workers,
+                request,
                 renderer.render_region,
                 source.path,
                 parsed_region,

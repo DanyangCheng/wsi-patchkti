@@ -459,3 +459,39 @@ async def test_tile_worker_pool_runs_blocking_jobs_concurrently() -> None:
 
     assert results == [0, 2, 4]
     assert max_active == 3
+
+
+@pytest.mark.anyio
+async def test_tile_worker_pool_skips_cancelled_queued_work() -> None:
+    started = threading.Event()
+    release = threading.Event()
+    queued_ran = False
+
+    def blocking_work() -> None:
+        started.set()
+        release.wait(timeout=2)
+
+    def queued_work() -> None:
+        nonlocal queued_ran
+        queued_ran = True
+
+    workers = TileWorkerPool(1)
+    first = asyncio.create_task(workers.run(blocking_work))
+    try:
+        for _ in range(100):
+            if started.is_set():
+                break
+            await asyncio.sleep(0.01)
+        assert started.is_set()
+        second = asyncio.create_task(workers.run(queued_work))
+        await asyncio.sleep(0.01)
+        second.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await second
+        release.set()
+        await first
+    finally:
+        release.set()
+        workers.close()
+
+    assert not queued_ran

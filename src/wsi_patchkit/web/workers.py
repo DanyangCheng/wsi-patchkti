@@ -57,8 +57,15 @@ class TileWorkerPool:
             if self._closed:
                 raise RuntimeError("tile worker pool is closed")
             self._queue.put(_WorkItem(future, function, args, kwargs))
-        while not future.done():
-            await asyncio.sleep(0.001)
+        try:
+            while not future.done():
+                await asyncio.sleep(0.001)
+        except asyncio.CancelledError:
+            # If work is still queued, the worker will skip it via
+            # set_running_or_notify_cancel(). A synchronous read that has
+            # already started cannot be interrupted safely.
+            future.cancel()
+            raise
         return future.result()
 
     def _worker(self) -> None:

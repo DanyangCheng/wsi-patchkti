@@ -36,6 +36,7 @@
   let currentSlide = null;
   let viewer = null;
   let openSequence = 0;
+  let slideRequestController = null;
   let cropActive = false;
   let cropOverlayAdded = false;
 
@@ -354,6 +355,15 @@
     const record = slides.get(slideId);
     if (!record) return;
     const sequence = ++openSequence;
+    slideRequestController?.abort();
+    const controller = new AbortController();
+    slideRequestController = controller;
+    if (viewer) {
+      if (cropOverlayAdded) viewer.removeOverlay(cropOverlay);
+      cropOverlayAdded = false;
+      cropOverlay.hidden = true;
+      viewer.close();
+    }
     currentSlideLabel.textContent = slideId;
     for (const item of slideList.querySelectorAll("button")) {
       const selected = item.dataset.slideId === slideId;
@@ -367,7 +377,9 @@
     try {
       let metadata = record;
       if (metadata.width === undefined) {
-        const response = await fetch(`/api/slides/${encodeURIComponent(slideId)}`);
+        const response = await fetch(`/api/slides/${encodeURIComponent(slideId)}`, {
+          signal: controller.signal,
+        });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         metadata = await response.json();
         slides.set(slideId, metadata);
@@ -377,9 +389,11 @@
       populateCropLevels();
       viewer.open(`/iiif/3/${encodeURIComponent(slideId)}/info.json`);
     } catch (error) {
-      if (sequence === openSequence) {
+      if (error.name !== "AbortError" && sequence === openSequence) {
         showStatus(`切片加载失败：${error.message}`);
       }
+    } finally {
+      if (slideRequestController === controller) slideRequestController = null;
     }
   }
 
