@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Renamed domain-level sampling APIs to `*PatchRequestSampler` and the PyTorch
+  adapter argument to `request_sampler`, distinguishing them from PyTorch
+  `DataLoader` samplers.
 - Added deterministic, fixed-length tissue-aware random sampling for distributed
   training and lazy random-access request sources for indexed sampling.
 - Added `PatchReadResult` and geometric valid masks for aligned patch reads.

@@ -140,7 +140,7 @@ region with area averaging; label and indexed-mask reads should continue to use
 
 ```python
 from wsi_patchkit import (
-    GridSampler,
+    GridPatchRequestSampler,
     PatchStream,
     SlideSpec,
     TiffReader,
@@ -149,7 +149,7 @@ from wsi_patchkit import (
 reader = TiffReader()
 metadata = reader.metadata("slide.tif", source_mpp=0.25)
 slide = SlideSpec.from_metadata(metadata, target_mpp=0.5)
-requests = GridSampler(patch_size=512, stride=256).sample([slide])
+requests = GridPatchRequestSampler(patch_size=512, stride=256).sample([slide])
 
 try:
     for patch in PatchStream(reader, requests):
@@ -166,14 +166,16 @@ be omitted instead.
 ## Reproducible random training samples
 
 ```python
-from wsi_patchkit import RandomSampler, SamplingContext, SlideSpec
+from wsi_patchkit import RandomPatchRequestSampler, SamplingContext, SlideSpec
 
 slides = [
     SlideSpec("a.svs", canvas_size=(120_000, 80_000), target_mpp=(0.5, 0.5)),
     SlideSpec("b.svs", canvas_size=(90_000, 70_000), target_mpp=(0.5, 0.5)),
 ]
-sampler = RandomSampler(num_samples=20_000, patch_size=512, seed=2026)
-requests = sampler.sample(slides, context=SamplingContext(epoch=3))
+request_sampler = RandomPatchRequestSampler(
+    num_samples=20_000, patch_size=512, seed=2026
+)
+requests = request_sampler.sample(slides, context=SamplingContext(epoch=3))
 ```
 
 Random samples are derived from `(seed, epoch, global sample index)`. Changing
@@ -195,15 +197,15 @@ The tissue mask may be low resolution; it is mapped over the corresponding
 target-MPP canvas. Version 0.1 consumes caller-provided masks and does not impose
 a tissue-detection algorithm.
 
-For distributed training, use `TissueRandomSampler` instead of filtering an
+For distributed training, use `TissueRandomPatchRequestSampler` instead of filtering an
 already-sharded request stream. It retries deterministically until every global
 sample meets the threshold, so `pad` and `drop` shard policies retain equal
 lengths:
 
 ```python
-from wsi_patchkit import TissueRandomSampler
+from wsi_patchkit import TissueRandomPatchRequestSampler
 
-sampler = TissueRandomSampler(
+request_sampler = TissueRandomPatchRequestSampler(
     masks,
     num_samples=20_000,
     patch_size=512,
@@ -215,7 +217,7 @@ sampler = TissueRandomSampler(
 
 ## Indexed sampling
 
-`IndexedSampler` samples precomputed `PatchRequest` objects. Index serialization
+`IndexedPatchRequestSampler` samples precomputed `PatchRequest` objects. Index serialization
 is deliberately left to the caller in v0.1 so projects can use NPZ, Parquet, or
 a database without coupling the core library to one storage format. Its input
 only needs `__len__()` and integer `__getitem__()`, allowing lazy wrappers over
@@ -237,19 +239,26 @@ membership, and target encoding stay in the downstream application.
 ## PyTorch adapter
 
 ```python
-from wsi_patchkit import RandomSampler, SlideSpec
+from wsi_patchkit import RandomPatchRequestSampler, SlideSpec
 from wsi_patchkit.io import TiffReader
 from wsi_patchkit.torch import WSIPatchIterableDataset
 
 dataset = WSIPatchIterableDataset(
     slides,
-    RandomSampler(num_samples=20_000, patch_size=512, seed=2026),
+    request_sampler=RandomPatchRequestSampler(
+        num_samples=20_000, patch_size=512, seed=2026
+    ),
     reader_factory=TiffReader,
 )
 ```
 
 Each worker creates and closes its own reader. Items contain a float32 CHW
 `image` tensor in `[0, 1]` plus the original `PatchRequest`.
+
+`PatchRequestSampler` is a domain-level request generator, not a PyTorch
+`torch.utils.data.Sampler`: the latter yields integer indices to a map-style
+dataset, while this adapter is an `IterableDataset` that generates and shards
+`PatchRequest` values inside each worker.
 
 ### Distributed training and checkpoints
 

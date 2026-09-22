@@ -12,8 +12,8 @@ from .base import PatchRequestSource
 
 
 @dataclass(frozen=True, slots=True)
-class IndexedSampler:
-    """Enumerate or randomly draw from a precomputed request index."""
+class IndexedPatchRequestSampler:
+    """Enumerate or randomly draw from a precomputed patch-request index."""
 
     requests: PatchRequestSource
     num_samples: int | None = None

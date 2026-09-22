@@ -12,9 +12,9 @@ from collections.abc import Callable
 from pathlib import Path
 
 from wsi_patchkit import (
-    GridSampler,
+    GridPatchRequestSampler,
     PatchStream,
-    RandomSampler,
+    RandomPatchRequestSampler,
     SlideSpec,
     TiffReader,
 )
@@ -41,8 +41,12 @@ def main() -> None:
         canvas_size=(100_000, 80_000),
         target_mpp=0.5,
     )
-    random_sampler = RandomSampler(arguments.samples, arguments.patch_size, seed=2026)
-    grid_sampler = GridSampler(arguments.patch_size, stride=arguments.patch_size)
+    random_sampler = RandomPatchRequestSampler(
+        arguments.samples, arguments.patch_size, seed=2026
+    )
+    grid_sampler = GridPatchRequestSampler(
+        arguments.patch_size, stride=arguments.patch_size
+    )
     random_seconds = _seconds(lambda: list(random_sampler.sample([synthetic])))
     grid_requests: list[object] = []
 
@@ -61,7 +65,9 @@ def main() -> None:
         metadata = reader.metadata(arguments.slide, source_mpp=arguments.source_mpp)
         slide = SlideSpec.from_metadata(metadata, target_mpp=0.5)
         requests = list(
-            RandomSampler(arguments.samples, arguments.patch_size, seed=2026).sample(
+            RandomPatchRequestSampler(
+                arguments.samples, arguments.patch_size, seed=2026
+            ).sample(
                 [slide]
             )
         )

@@ -4,15 +4,15 @@ import numpy as np
 import pytest
 
 from wsi_patchkit import (
-    GridSampler,
-    IndexedSampler,
+    GridPatchRequestSampler,
+    IndexedPatchRequestSampler,
     PatchRequest,
-    RandomSampler,
+    RandomPatchRequestSampler,
     SamplingContext,
     SlideSpec,
     TissueFilter,
     TissueMask,
-    TissueRandomSampler,
+    TissueRandomPatchRequestSampler,
     axis_positions,
 )
 
@@ -22,7 +22,7 @@ def _slide(name: str = "slide.tif") -> SlideSpec:
 
 
 def test_grid_aligns_the_last_window_to_each_edge() -> None:
-    requests = list(GridSampler(patch_size=4, stride=3).sample([_slide()]))
+    requests = list(GridPatchRequestSampler(patch_size=4, stride=3).sample([_slide()]))
 
     assert axis_positions(10, 4, 3) == (0, 3, 6)
     assert axis_positions(8, 4, 3) == (0, 3, 4)
@@ -42,16 +42,16 @@ def test_grid_aligns_the_last_window_to_each_edge() -> None:
 def test_drop_policy_omits_an_incomplete_small_slide() -> None:
     slide = SlideSpec("small.tif", canvas_size=(2, 2), target_mpp=0.5)
 
-    assert list(GridSampler(4, edge="drop").sample([slide])) == []
+    assert list(GridPatchRequestSampler(4, edge="drop").sample([slide])) == []
 
 
 def test_aligned_grid_rejects_gaps() -> None:
     with pytest.raises(ValueError, match="stride must not exceed"):
-        GridSampler(patch_size=4, stride=5)
+        GridPatchRequestSampler(patch_size=4, stride=5)
 
 
 def test_grid_workers_are_disjoint_and_complete() -> None:
-    sampler = GridSampler(patch_size=4, stride=3)
+    sampler = GridPatchRequestSampler(patch_size=4, stride=3)
     full = list(sampler.sample([_slide()]))
     worker0 = list(
         sampler.sample(
@@ -73,7 +73,7 @@ def test_grid_workers_are_disjoint_and_complete() -> None:
 
 def test_random_sampling_is_reproducible_and_epoch_sensitive() -> None:
     slides = [_slide("a.tif"), _slide("b.tif")]
-    sampler = RandomSampler(num_samples=30, patch_size=4, seed=19)
+    sampler = RandomPatchRequestSampler(num_samples=30, patch_size=4, seed=19)
 
     first = list(sampler.sample(slides, context=SamplingContext(epoch=2)))
     repeated = list(sampler.sample(slides, context=SamplingContext(epoch=2)))
@@ -85,7 +85,7 @@ def test_random_sampling_is_reproducible_and_epoch_sensitive() -> None:
 
 
 def test_random_worker_shards_rebuild_the_global_sample_set() -> None:
-    sampler = RandomSampler(num_samples=17, patch_size=3, seed=2)
+    sampler = RandomPatchRequestSampler(num_samples=17, patch_size=3, seed=2)
     full = list(sampler.sample([_slide()]))
     workers = [
         list(
@@ -107,7 +107,7 @@ def test_random_worker_shards_rebuild_the_global_sample_set() -> None:
 
 def test_padded_shards_have_equal_lengths_and_repeat_from_the_start() -> None:
     requests = tuple(PatchRequest("slide.tif", x, 0, 2, 2, 0.5) for x in range(5))
-    sampler = IndexedSampler(requests)
+    sampler = IndexedPatchRequestSampler(requests)
 
     shards = [
         list(
@@ -132,7 +132,7 @@ def test_padded_shards_have_equal_lengths_and_repeat_from_the_start() -> None:
 
 def test_dropped_shards_have_equal_lengths_without_repeating() -> None:
     requests = tuple(PatchRequest("slide.tif", x, 0, 2, 2, 0.5) for x in range(5))
-    sampler = IndexedSampler(requests)
+    sampler = IndexedPatchRequestSampler(requests)
 
     shards = [
         list(
@@ -163,19 +163,19 @@ def test_sampling_context_state_resumes_a_padded_sequence() -> None:
     restored = SamplingContext.from_state_dict(context.state_dict())
 
     assert restored == context
-    resumed = list(IndexedSampler(requests).sample(context=restored))
+    resumed = list(IndexedPatchRequestSampler(requests).sample(context=restored))
     assert [request.x for request in resumed] == [4]
 
 
 def test_indexed_sampling_validates_and_shards_requests() -> None:
     requests = tuple(PatchRequest("slide.tif", x, 0, 2, 2, 0.5) for x in range(5))
-    sampler = IndexedSampler(requests)
+    sampler = IndexedPatchRequestSampler(requests)
 
     assert list(
         sampler.sample(context=SamplingContext(worker_id=1, num_workers=2))
     ) == list(requests[1::2])
     with pytest.raises(ValueError, match="one value per request"):
-        IndexedSampler(requests, weights=(1.0,))
+        IndexedPatchRequestSampler(requests, weights=(1.0,))
 
 
 def test_tissue_filter_maps_a_low_resolution_mask_to_the_canvas() -> None:
@@ -183,7 +183,9 @@ def test_tissue_filter_maps_a_low_resolution_mask_to_the_canvas() -> None:
         np.array([[1, 0], [1, 0]], dtype=np.uint8),
         canvas_size=(10, 8),
     )
-    requests = list(GridSampler(patch_size=(5, 4), stride=(5, 4)).sample([_slide()]))
+    requests = list(
+        GridPatchRequestSampler(patch_size=(5, 4), stride=(5, 4)).sample([_slide()])
+    )
 
     selected = list(
         TissueFilter({"slide.tif": mask}, minimum_fraction=0.5).filter(requests)
@@ -195,7 +197,7 @@ def test_tissue_filter_maps_a_low_resolution_mask_to_the_canvas() -> None:
 def test_tissue_random_sampler_is_deterministic_and_keeps_equal_shards() -> None:
     slide = _slide()
     mask = TissueMask(np.ones((2, 2), dtype=np.uint8), canvas_size=slide.canvas_size)
-    sampler = TissueRandomSampler(
+    sampler = TissueRandomPatchRequestSampler(
         {slide.path: mask},
         num_samples=5,
         patch_size=3,
@@ -227,7 +229,7 @@ def test_tissue_random_sampler_is_deterministic_and_keeps_equal_shards() -> None
 
 def test_tissue_random_sampler_fails_when_no_valid_request_exists() -> None:
     slide = _slide()
-    sampler = TissueRandomSampler(
+    sampler = TissueRandomPatchRequestSampler(
         {slide.path: TissueMask(np.zeros((1, 1)), canvas_size=slide.canvas_size)},
         num_samples=1,
         patch_size=3,
@@ -254,7 +256,7 @@ def test_indexed_sampler_keeps_a_lazy_request_source() -> None:
             return requests[index]
 
     source = Source()
-    sampler = IndexedSampler(source)
+    sampler = IndexedPatchRequestSampler(source)
 
     assert sampler.requests is source
     assert source.get_calls == 0

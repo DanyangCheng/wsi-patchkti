@@ -12,14 +12,14 @@ from torch.utils.data import IterableDataset, get_worker_info
 
 from ..geometry import Interpolation
 from ..io.base import SlideReader
-from ..sampling.base import PatchSampler
+from ..sampling.base import PatchRequestSampler
 from ..sampling.tissue import TissueFilter
 from ..stream import PatchStream
 from ..types import Patch, SamplingContext, SlideSpec
 
 
 class WSIPatchIterableDataset(IterableDataset[Mapping[str, Any]]):
-    """Materialize sampler requests with one reader per DataLoader worker.
+    """Materialize patch-request samples with one reader per DataLoader worker.
 
     By default, the final global sampling round is padded so every distributed
     rank and DataLoader worker receives an equal number of requests. Padding
@@ -30,7 +30,7 @@ class WSIPatchIterableDataset(IterableDataset[Mapping[str, Any]]):
     def __init__(
         self,
         slides: Sequence[SlideSpec],
-        sampler: PatchSampler,
+        request_sampler: PatchRequestSampler,
         *,
         reader_factory: Callable[[], SlideReader],
         tissue_filter: TissueFilter | None = None,
@@ -56,10 +56,11 @@ class WSIPatchIterableDataset(IterableDataset[Mapping[str, Any]]):
         if tissue_filter is not None and even_shards != "none":
             raise ValueError(
                 "TissueFilter runs after sharding and cannot guarantee equal "
-                "DDP lengths; use even_shards='none' or a tissue-aware sampler"
+                "DDP lengths; use even_shards='none' or a tissue-aware "
+                "patch-request sampler"
             )
         self.slides = tuple(slides)
-        self.sampler = sampler
+        self.request_sampler = request_sampler
         self.reader_factory = reader_factory
         self.tissue_filter = tissue_filter
         self.transform = transform
@@ -78,7 +79,7 @@ class WSIPatchIterableDataset(IterableDataset[Mapping[str, Any]]):
 
     @property
     def start_index(self) -> int:
-        """The next virtual global sampler index used on iteration."""
+        """The next virtual global request-sampler index used on iteration."""
         return int(self._sampling_state[1].item())
 
     def set_epoch(self, epoch: int, *, start_index: int = 0) -> None:
@@ -100,7 +101,7 @@ class WSIPatchIterableDataset(IterableDataset[Mapping[str, Any]]):
         self.set_epoch(self.epoch, start_index=start_index)
 
     def state_dict(self) -> dict[str, int | str]:
-        """Return checkpointable epoch and sampler-cursor state.
+        """Return checkpointable epoch and request-sampler cursor state.
 
         The caller owns advancing ``start_index`` while consuming batches. This
         is deliberate: DataLoader prefetching means a worker-local iterator
@@ -162,7 +163,7 @@ class WSIPatchIterableDataset(IterableDataset[Mapping[str, Any]]):
         return {"image": tensor, "request": patch.request}
 
     def __iter__(self) -> Iterator[Mapping[str, Any]]:
-        requests = self.sampler.sample(self.slides, context=self._context())
+        requests = self.request_sampler.sample(self.slides, context=self._context())
         if self.tissue_filter is not None:
             requests = self.tissue_filter.filter(requests)
         reader = self.reader_factory()

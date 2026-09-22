@@ -11,8 +11,8 @@ from ..types import PatchRequest, SamplingContext, SlideSpec, as_size
 
 
 @dataclass(frozen=True, slots=True)
-class RandomSampler:
-    """Draw globally deterministic random patches across weighted slides."""
+class RandomPatchRequestSampler:
+    """Draw globally deterministic random patch requests across weighted slides."""
 
     num_samples: int
     patch_size: int | tuple[int, int]

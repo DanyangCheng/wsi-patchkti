@@ -8,7 +8,12 @@ import tifffile
 
 torch = pytest.importorskip("torch")
 
-from wsi_patchkit import GridSampler, Patch, RandomSampler, SlideSpec  # noqa: E402
+from wsi_patchkit import (  # noqa: E402
+    GridPatchRequestSampler,
+    Patch,
+    RandomPatchRequestSampler,
+    SlideSpec,
+)
 from wsi_patchkit.io import TiffReader  # noqa: E402
 from wsi_patchkit.torch import WSIPatchIterableDataset  # noqa: E402
 
@@ -31,7 +36,7 @@ def test_torch_dataset_returns_chw_float_tensor(tmp_path: Path) -> None:
     slide = SlideSpec(path, canvas_size=(4, 4), target_mpp=0.5)
     dataset = WSIPatchIterableDataset(
         [slide],
-        GridSampler(2),
+        request_sampler=GridPatchRequestSampler(2),
         reader_factory=TiffReader,
     )
 
@@ -61,7 +66,7 @@ def test_torch_dataset_passes_area_interpolation_to_patch_stream(
     )
     dataset = WSIPatchIterableDataset(
         [SlideSpec(path, canvas_size=(2, 2), target_mpp=0.5)],
-        GridSampler(2),
+        request_sampler=GridPatchRequestSampler(2),
         reader_factory=TiffReader,
         interpolation="area",
     )
@@ -83,7 +88,9 @@ def test_dataset_epoch_is_visible_to_persistent_workers(tmp_path: Path) -> None:
     )
     dataset = WSIPatchIterableDataset(
         [SlideSpec(path, canvas_size=(16, 16), target_mpp=0.5)],
-        RandomSampler(num_samples=12, patch_size=2, seed=7),
+        request_sampler=RandomPatchRequestSampler(
+            num_samples=12, patch_size=2, seed=7
+        ),
         reader_factory=TiffReader,
         transform=_coordinates,
     )
@@ -108,7 +115,7 @@ def test_dataset_epoch_is_visible_to_persistent_workers(tmp_path: Path) -> None:
 def test_dataset_checkpoint_state_restores_epoch_and_cursor(tmp_path: Path) -> None:
     dataset = WSIPatchIterableDataset(
         [SlideSpec(tmp_path / "slide.tif", canvas_size=(4, 4), target_mpp=0.5)],
-        GridSampler(2),
+        request_sampler=GridPatchRequestSampler(2),
         reader_factory=TiffReader,
         epoch=2,
         start_index=7,

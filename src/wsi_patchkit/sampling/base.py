@@ -23,8 +23,8 @@ class PatchRequestSource(Protocol):
         """Return one request by zero-based position."""
 
 
-class PatchSampler(Protocol):
-    """Protocol implemented by slide-aware request samplers.
+class PatchRequestSampler(Protocol):
+    """Protocol implemented by slide-aware patch-request samplers.
 
     Finite samplers should enumerate their global sequence through
     :meth:`SamplingContext.indices` and resolve padded positions with

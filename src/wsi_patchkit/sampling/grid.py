@@ -36,8 +36,8 @@ def axis_positions(
 
 
 @dataclass(frozen=True, slots=True)
-class GridSampler:
-    """Enumerate a complete, optionally edge-aligned patch grid."""
+class GridPatchRequestSampler:
+    """Enumerate complete, optionally edge-aligned patch requests."""
 
     patch_size: int | tuple[int, int]
     stride: int | tuple[int, int] | None = None

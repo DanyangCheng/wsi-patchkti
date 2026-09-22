@@ -107,7 +107,7 @@ class TissueFilter:
 
 
 @dataclass(frozen=True, slots=True)
-class TissueRandomSampler:
+class TissueRandomPatchRequestSampler:
     """Draw a fixed, deterministic number of random requests inside tissue.
 
     Unlike :class:`TissueFilter`, this sampler validates tissue membership

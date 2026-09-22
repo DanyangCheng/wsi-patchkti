@@ -1,19 +1,19 @@
-"""Patch-coordinate sampling strategies."""
+"""Patch-request sampling strategies, independent of PyTorch DataLoader samplers."""
 
-from .base import PatchRequestSource, PatchSampler
-from .grid import GridSampler, axis_positions
-from .indexed import IndexedSampler
-from .random import RandomSampler
-from .tissue import TissueFilter, TissueMask, TissueRandomSampler
+from .base import PatchRequestSampler, PatchRequestSource
+from .grid import GridPatchRequestSampler, axis_positions
+from .indexed import IndexedPatchRequestSampler
+from .random import RandomPatchRequestSampler
+from .tissue import TissueFilter, TissueMask, TissueRandomPatchRequestSampler
 
 __all__ = [
-    "GridSampler",
-    "IndexedSampler",
+    "GridPatchRequestSampler",
+    "IndexedPatchRequestSampler",
+    "PatchRequestSampler",
     "PatchRequestSource",
-    "PatchSampler",
-    "RandomSampler",
+    "RandomPatchRequestSampler",
     "TissueFilter",
     "TissueMask",
-    "TissueRandomSampler",
+    "TissueRandomPatchRequestSampler",
     "axis_positions",
 ]
